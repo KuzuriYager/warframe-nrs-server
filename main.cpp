@@ -55,9 +55,9 @@ static std::string packData(const std::string& data, const std::string_view& sal
 		*(uint32_t*)(sw.data.data() + 1) = Endianness::toNetwork(crc32c::hash((const uint8_t*)salt.data(), salt.size(), initial));
 	}
 
-	std::cout << "Server says: " << string::bin2hex(sw.data) << std::endl;
+	//std::cout << "Server says: " << string::bin2hex(sw.data) << std::endl;
 
-#if false
+#if true
 	if (uint16_t decompressed_size = sw.data.size() - 1;
 		decompressed_size > 0x3F
 		)
@@ -164,7 +164,7 @@ int main(int argc, const char** argv)
 			sr = MemoryRefReader(data);
 		}
 
-		std::cout << addr.toString() << " > " << string::bin2hex(data) << std::endl;
+		//std::cout << addr.toString() << " > " << string::bin2hex(data) << std::endl;
 
 		uint32_t chksum;
 		sr.u32_be(chksum);
@@ -293,15 +293,15 @@ int main(int argc, const char** argv)
 					sr.skip(1);
 					ser_str(sr, salt, data->presence);
 
-					std::cout << addr.toString() << " - " << string::bin2hex(acctId) << " - Client Local Addr: " << IpAddr((native_u32_t)local_ip).toString() << ":" << local_port << std::endl;
-					std::cout << addr.toString() << " - " << string::bin2hex(acctId) << " - Status: " << (int)data->status << std::endl;
-					std::cout << addr.toString() << " - " << string::bin2hex(acctId) << " - Presence: " << data->presence << std::endl;
+					//std::cout << addr.toString() << " - " << string::bin2hex(acctId) << " - Client Local Addr: " << IpAddr((native_u32_t)local_ip).toString() << ":" << local_port << std::endl;
+					//std::cout << addr.toString() << " - " << string::bin2hex(acctId) << " - Status: " << (int)data->status << std::endl;
+					//std::cout << addr.toString() << " - " << string::bin2hex(acctId) << " - Presence: " << data->presence << std::endl;
 
 					//data->sendGameInvite(s, acctId, acctId, R"({})", "Welcome :)", 0, 0);
 				}
 				else
 				{
-					std::cout << addr.toString() << " - " << string::bin2hex(acctId) << " - Server Local Addr: " << IpAddr((native_u32_t)local_ip).toString() << ":" << local_port << std::endl;
+					//std::cout << addr.toString() << " - " << string::bin2hex(acctId) << " - Server Local Addr: " << IpAddr((native_u32_t)local_ip).toString() << ":" << local_port << std::endl;
 
 					data->reflexive_port_server = reflexive_port;
 					data->local_port_server = local_port;
@@ -456,7 +456,7 @@ int main(int argc, const char** argv)
 				std::string unk_str;
 				ser_str(sr, salt, unk_str);
 				SOUP_UNUSED(unk_str);
-				std::cout << addr.toString() << " - " << inviter_name << " (" << string::bin2hex(acctId) << ") sending invite to " << string::bin2hex(target) << std::endl;
+				//std::cout << addr.toString() << " - " << inviter_name << " (" << string::bin2hex(acctId) << ") sending invite to " << string::bin2hex(target) << std::endl;
 				if (auto e = account_map.find(target); e != account_map.end())
 				{
 					e->second.sendGameInvite(s, acctId, target, session_info, inviter_name, unk, presence_mode);
