@@ -10,6 +10,7 @@
 #include <Socket.hpp>
 #include <string.hpp>
 #include <StringWriter.hpp>
+#include <time.hpp>
 #include <utility.hpp>
 
 #ifdef DOCKER
@@ -112,6 +113,8 @@ struct AccountData
 
 	uint8_t status;
 	std::string presence;
+
+	time_t last_nat_bind;
 
 	void sendGameInvite(Socket& s, const std::string& inviter_acctId, const std::string& invitee_acctId, const std::string& session_info, const std::string& inviter_name, uint8_t unk = 0, uint8_t presence_mode = 3)
 	{
@@ -284,7 +287,6 @@ int main(int argc, const char** argv)
 				data->reflexive_ip = reflexive_ip;
 				data->local_ip = local_ip;
 				data->salt = salt;
-
 				if (packet_id == 0x42)
 				{
 					data->reflexive_port_client = reflexive_port;
@@ -307,6 +309,7 @@ int main(int argc, const char** argv)
 					data->reflexive_port_server = reflexive_port;
 					data->local_port_server = local_port;
 				}
+				data->last_nat_bind = time::unixSeconds();
 
 				reflexive_ip ^= 0xAAAAAAAA;
 				reflexive_port ^= 0xAAAA;
@@ -354,20 +357,22 @@ int main(int argc, const char** argv)
 					sw.str(12, query);
 					if (auto e = account_map.find(query); e != account_map.end())
 					{
-						sw.u8(e->second.status); // TODO: Some kind of recency/sign-of-life check?
-						if (packet_id == 0x50)
+						if (time::unixSecondsSince(e->second.last_nat_bind) <= 120)
 						{
-							ser_str(sw, salt, e->second.presence);
+							sw.u8(e->second.status);
+							if (packet_id == 0x50)
+							{
+								ser_str(sw, salt, e->second.presence);
+							}
+							continue;
 						}
+						account_map.erase(e);
 					}
-					else
+					{ uint8_t b = 0; sw.u8(b); }
+					if (packet_id == 0x50)
 					{
-						{ uint8_t b = 0; sw.u8(b); }
-						if (packet_id == 0x50)
-						{
-							std::string str;
-							ser_str(sw, salt, str);
-						}
+						std::string str;
+						ser_str(sw, salt, str);
 					}
 				}
 				s.udpServerSend(addr, packData(sw.data, salt));
