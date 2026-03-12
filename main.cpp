@@ -17,6 +17,14 @@
 #include <signal.h>
 #endif
 
+#define DEPLOYMENT false
+
+#if DEPLOYMENT
+#define PORT 4950
+#else
+#define PORT 1234
+#endif
+
 using namespace soup;
 
 static bool is_u27_or_below(const std::string_view& salt)
@@ -211,6 +219,13 @@ int main(int argc, const char** argv)
 			}
 		}
 		//std::cout << addr.toString() << " - salt = " << salt << std::endl;
+#if DEPLOYMENT
+		if (!is_u32_or_below(salt))
+		{
+			std::cout << addr.toString() << " - Cleartext traffic from a post-DTLS version, sus" << std::endl;
+			return;
+		}
+#endif
 
 		uint8_t packet_id;
 		sr.u8(packet_id);
@@ -562,12 +577,12 @@ int main(int argc, const char** argv)
 		}
 	});
 
-	if (!serv.bindUdp(1234, &srv))
+	if (!serv.bindUdp(PORT, &srv))
 	{
-		std::cout << "Failed to bind UDP/1234" << std::endl;
+		std::cout << "Failed to bind UDP/" << PORT << std::endl;
 		return 1;
 	}
-	std::cout << "Bound to UDP/1234" << std::endl;
+	std::cout << "Bound to UDP/" << PORT << std::endl;
 
 #ifdef DOCKER
 	// Ctrl+C not killing your software? According to the professional ChatGPTs hired by Docker Inc, it's not an issue. Why? Because there's a workaround!
