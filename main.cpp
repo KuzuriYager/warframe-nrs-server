@@ -479,8 +479,14 @@ int main(int argc, const char** argv)
 				}
 				else
 				{
-					// TODO: Send game invite response 0x00 for offline ?
-					// (Tho idk under which conditions this would even be possible to trigger)
+					// Send game invite response with status 0 for offline
+					StringWriter sw;
+					{ uint8_t b = 0xa4; sw.u8(b); }
+					sw.str(12, acctId);
+					sw.str(12, target);
+					uint8_t status = 0;
+					sw.u8(status);
+					s.udpServerSend(addr, packData(sw.data, salt));
 				}
 			}
 			break;
