@@ -511,7 +511,45 @@ int main(int argc, const char** argv)
 			}
 			break;
 
-			// TODO: In U39, friend request/removal notifications are sent via NRS instead of IRC
+		case 0x6a: // Send social change (when accepting a friend request or removing a friend in U39 and below; done via IRC nowadays)
+			{
+				std::string acctId; sr.str(12, acctId);
+				uint8_t task_id; sr.u8(task_id);
+				uint8_t num_changes = 0; sr.u8(num_changes);
+				while (num_changes--)
+				{
+					std::string target; sr.str(12, target);
+					std::string json; ser_str(sr, salt, json);
+					if (auto e = account_map.find(target); e != account_map.end())
+					{
+						StringWriter sw;
+						{ uint8_t b = 0xac; sw.u8(b); }
+						sw.u8(task_id);
+						ser_str(sw, e->second.salt, json);
+						s.udpServerSend(SocketAddr(e->second.reflexive_ip, e->second.reflexive_port_client), packData(sw.data, e->second.salt));
+					}
+				}
+			}
+			break;
+
+		case 0x73: // Request friend refresh (when sending a friend request in U39 and below; done via IRC nowadays)
+			{
+				std::string acctId; sr.str(12, acctId);
+				uint8_t unk; sr.u8(unk); // always 0x09 ?
+				uint8_t num_targets = 0; sr.u8(num_targets);
+				while (num_targets--)
+				{
+					std::string target; sr.str(12, target);
+					if (auto e = account_map.find(target); e != account_map.end())
+					{
+						StringWriter sw;
+						{ uint8_t b = 0x78; sw.u8(b); }
+						sw.u8(unk);
+						s.udpServerSend(SocketAddr(e->second.reflexive_ip, e->second.reflexive_port_client), packData(sw.data, e->second.salt));
+					}
+				}
+			}
+			break;
 
 		default:
 			std::cout << addr.toString() << " - Unknown packet with id " << (int)packet_id << ": " << string::bin2hex(data) << std::endl;
