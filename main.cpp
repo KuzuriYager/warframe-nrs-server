@@ -388,9 +388,16 @@ int main(int argc, const char** argv)
 					StringWriter sw;
 					{ uint8_t b = 0x68; sw.u8(b); }
 					sw.u8(task_id);
-					{ uint8_t b = 1; sw.u8(b); }
-					sw.str(12, query);
-					{ uint8_t b = 0x81; sw.u8(b); }
+					{ uint8_t b = 1; sw.u8(b); } // num results
+					sw.str(12, query); // result 0 account id
+					if (!is_u32_or_below(salt))
+					{
+						{ uint8_t b = 0x81; sw.u8(b); } // result 0 bitflags
+					}
+					else
+					{
+						{ uint8_t b = 4; sw.u8(b); } // result 0 bitflags
+					}
 					{
 						uint32_t masked_ip = e->second.reflexive_ip ^ 0xAAAAAAAA;
 						sw.u32_be(masked_ip);
