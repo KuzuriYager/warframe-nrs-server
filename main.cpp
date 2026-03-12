@@ -293,6 +293,7 @@ int main(int argc, const char** argv)
 					sr.skip(1);
 					ser_str(sr, salt, data->presence);
 
+					//std::cout << addr.toString() << " - " << string::bin2hex(acctId) << " - NAT bound for client " << string::bin2hex(acctId) << std::endl;
 					//std::cout << addr.toString() << " - " << string::bin2hex(acctId) << " - Client Local Addr: " << IpAddr((native_u32_t)local_ip).toString() << ":" << local_port << std::endl;
 					//std::cout << addr.toString() << " - " << string::bin2hex(acctId) << " - Status: " << (int)data->status << std::endl;
 					//std::cout << addr.toString() << " - " << string::bin2hex(acctId) << " - Presence: " << data->presence << std::endl;
@@ -313,7 +314,10 @@ int main(int argc, const char** argv)
 				StringWriter sw;
 				{ uint8_t b = 0x60; sw.u8(b); }
 				{ uint8_t b = 0; sw.u8(b); } // should be 1 if we supported proxying?
-				{ uint8_t b = (packet_id == 0x42 ? 1 : 0); sw.u8(b); }
+				if (!is_u32_or_below(salt))
+				{
+					{ uint8_t b = (packet_id == 0x42 ? 1 : 0); sw.u8(b); }
+				}
 				sw.u32_be(reflexive_ip);
 				sw.u16_le(reflexive_port);
 				s.udpServerSend(addr, packData(sw.data, salt));
