@@ -284,10 +284,10 @@ int main(int argc, const char** argv)
 				sr.u32_be(local_ip);
 				uint16_t local_port;
 				sr.u16_le(local_port);
-				if (!is_u32_or_below(salt))
+				/*if (!is_u27_or_below(salt))
 				{
 					sr.skip(2);
-				}
+				}*/
 
 				local_ip ^= 0xAAAAAAAA;
 				local_port ^= 0xAAAA;
@@ -337,7 +337,7 @@ int main(int argc, const char** argv)
 				StringWriter sw;
 				{ uint8_t b = 0x60; sw.u8(b); }
 				{ uint8_t b = 0; sw.u8(b); } // should be 1 if we supported proxying?
-				if (!is_u32_or_below(salt))
+				if (!is_u27_or_below(salt)) // 2022.04.29.12.53 (~ U31.5) crashes when this field is not given.
 				{
 					{ uint8_t b = (packet_id == 0x42 ? 1 : 0); sw.u8(b); }
 				}
