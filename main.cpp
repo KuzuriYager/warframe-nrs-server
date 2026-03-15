@@ -17,8 +17,6 @@
 #include <signal.h>
 #endif
 
-#define DEPLOYMENT false
-
 #if DEPLOYMENT
 #define PORT 4950
 #else
