@@ -284,10 +284,10 @@ int main(int argc, const char** argv)
 				sr.u32_be(local_ip);
 				uint16_t local_port;
 				sr.u16_le(local_port);
-				/*if (!is_u27_or_below(salt))
+				if (!is_u27_or_below(salt))
 				{
 					sr.skip(2);
-				}*/
+				}
 
 				local_ip ^= 0xAAAAAAAA;
 				local_port ^= 0xAAAA;
@@ -313,12 +313,17 @@ int main(int argc, const char** argv)
 					//data->local_port_client = local_port;
 					sr.u8(data->status);
 					sr.skip(1);
-					ser_str(sr, salt, data->presence);
+					std::string presence;
+					ser_str(sr, salt, presence);
 
 					//std::cout << addr.toString() << " - " << string::bin2hex(acctId) << " - NAT bound for client " << string::bin2hex(acctId) << std::endl;
 					//std::cout << addr.toString() << " - " << string::bin2hex(acctId) << " - Client Local Addr: " << IpAddr((native_u32_t)local_ip).toString() << ":" << local_port << std::endl;
 					//std::cout << addr.toString() << " - " << string::bin2hex(acctId) << " - Status: " << (int)data->status << std::endl;
-					//std::cout << addr.toString() << " - " << string::bin2hex(acctId) << " - Presence: " << data->presence << std::endl;
+					if (presence != data->presence)
+					{
+						data->presence = std::move(presence);
+						std::cout << addr.toString() << " - " << string::bin2hexLower(acctId) << " - Updated presence: " << data->presence << std::endl;
+					}
 
 					//data->sendGameInvite(s, acctId, acctId, R"({})", "Welcome :)", 0, 0);
 				}
