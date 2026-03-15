@@ -320,7 +320,7 @@ int main(int argc, const char** argv)
 					if (presence != data->presence)
 					{
 						data->presence = std::move(presence);
-						std::cout << addr.toString() << " - " << string::bin2hexLower(acctId) << " - Updated presence: " << data->presence << std::endl;
+						std::cout << addr.toString() << "#" << string::bin2hexLower(acctId) << " - Updated presence: " << data->presence << std::endl;
 					}
 
 					//data->sendGameInvite(s, acctId, acctId, R"({})", "Welcome :)", 0, 0);
@@ -473,6 +473,8 @@ int main(int argc, const char** argv)
 					sw.u32_be(reflexive_ip);
 					sw.u16_le(reflexive_port);
 					s.udpServerSend(SocketAddr(e->second.reflexive_ip, e->second.reflexive_port_server), packData(sw.data, e->second.salt));
+
+					std::cout << addr.toString() << "#" << string::bin2hexLower(acctId) << " - Introduced to " << SocketAddr(e->second.reflexive_ip, e->second.reflexive_port_client).toString() << "#" << string::bin2hexLower(target) << std::endl;
 				}
 			}
 			break;
@@ -550,6 +552,7 @@ int main(int argc, const char** argv)
 						sw.u8(task_id);
 						ser_str(sw, e->second.salt, json);
 						s.udpServerSend(SocketAddr(e->second.reflexive_ip, e->second.reflexive_port_client), packData(sw.data, e->second.salt));
+						std::cout << addr.toString() << "#" << string::bin2hexLower(acctId) << " - Sent social change " << (int)task_id << " " << json << " to " << SocketAddr(e->second.reflexive_ip, e->second.reflexive_port_client).toString() << "#" << string::bin2hexLower(target) << std::endl;
 					}
 				}
 			}
@@ -569,6 +572,7 @@ int main(int argc, const char** argv)
 						{ uint8_t b = 0x78; sw.u8(b); }
 						sw.u8(unk);
 						s.udpServerSend(SocketAddr(e->second.reflexive_ip, e->second.reflexive_port_client), packData(sw.data, e->second.salt));
+						std::cout << addr.toString() << "#" << string::bin2hexLower(acctId) << " - Sent friend request refresh " << (int)unk << " to " << SocketAddr(e->second.reflexive_ip, e->second.reflexive_port_client).toString() << "#" << string::bin2hexLower(target) << std::endl;
 					}
 				}
 			}
