@@ -683,7 +683,7 @@ int main(int argc, const char** argv)
 					}
 					s.udpServerSend(SocketAddr(e->second.reflexive_ip, (packet_id & 0x20) ? e->second.reflexive_port_server : e->second.reflexive_port_client), packData(sw.data, e->second.salt));
 
-					std::cout << addr.toString() << "#" << string::bin2hexLower(acctId) << " - Introduced to " << SocketAddr(e->second.reflexive_ip, e->second.reflexive_port_client).toString() << "#" << string::bin2hexLower(target) << std::endl;
+					std::cout << addr.toString() << "#" << string::bin2hexLower(acctId) << " - Introduced to " << SocketAddr(e->second.reflexive_ip, (packet_id & 0x20) ? e->second.reflexive_port_server : e->second.reflexive_port_client).toString() << "#" << string::bin2hexLower(target) << std::endl;
 				}
 			}
 			break;
