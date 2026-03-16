@@ -4,6 +4,7 @@
 #include <crc32.hpp>
 #include <crc32c.hpp>
 #include <lzf.hpp>
+#include <md5.hpp>
 #include <MemoryRefReader.hpp>
 #include <Server.hpp>
 #include <ServerServiceUdp.hpp>
@@ -25,9 +26,16 @@
 
 using namespace soup;
 
+static bool is_u12_or_below(const std::string_view& salt)
+{
+	return salt == "3bd61b742870d0bb3";
+}
+
 static bool is_u15_or_below(const std::string_view& salt)
 {
-	return salt == "6f7fd17e0eb641abH";
+	return salt == "6f7fd17e0eb641abH"
+		|| is_u12_or_below(salt)
+		;
 }
 
 static bool is_u27_or_below(const std::string_view& salt)
@@ -51,22 +59,38 @@ static std::string packData(const std::string& data, const std::string_view& sal
 {
 	StringWriter sw;
 
-	sw.skip(5); // placeholder for compression byte + CRC
+	sw.skip(!is_u12_or_below(salt) ? 5 : 9); // placeholder for compression byte + CRC
 
 	uint32_t magic = 0x80000000;
 	sw.u32_le(magic);
 
 	sw.str_lp<u16_le_t>(data);
 
-	if (is_u32_or_below(salt))
+	if (!is_u12_or_below(salt))
 	{
-		uint32_t initial = crc32::hash((const uint8_t*)sw.data.data() + 5, sw.data.size() - 5);
-		*(uint32_t*)(sw.data.data() + 1) = Endianness::toNetwork(crc32::hash((const uint8_t*)salt.data(), salt.size(), initial));	
+		if (!is_u32_or_below(salt))
+		{
+			uint32_t initial = crc32c::hash((const uint8_t*)sw.data.data() + 5, sw.data.size() - 5);
+			*(uint32_t*)(sw.data.data() + 1) = Endianness::toNetwork(crc32c::hash((const uint8_t*)salt.data(), salt.size(), initial));
+		}
+		else
+		{
+			uint32_t initial = crc32::hash((const uint8_t*)sw.data.data() + 5, sw.data.size() - 5);
+			*(uint32_t*)(sw.data.data() + 1) = Endianness::toNetwork(crc32::hash((const uint8_t*)salt.data(), salt.size(), initial));	
+		}
 	}
 	else
 	{
-		uint32_t initial = crc32c::hash((const uint8_t*)sw.data.data() + 5, sw.data.size() - 5);
-		*(uint32_t*)(sw.data.data() + 1) = Endianness::toNetwork(crc32c::hash((const uint8_t*)salt.data(), salt.size(), initial));
+		md5::State st;
+		st.append((const uint8_t*)sw.data.data() + 9, sw.data.size() - 9);
+		st.append(salt.data(), salt.size());
+		union {
+			uint8_t digest[md5::DIGEST_BYTES];
+			uint64_t chksum64;
+		} u;
+		st.finalise();
+		st.getDigest(u.digest);
+		*(uint64_t*)(sw.data.data() + 1) = u.chksum64;
 	}
 
 	//std::cout << "Server says: " << string::bin2hex(sw.data) << std::endl;
@@ -121,7 +145,7 @@ struct AccountData
 
 	native_u16_t reflexive_port_client = 4955;
 	native_u16_t reflexive_port_server = 4950;
-	//native_u16_t local_port_client = 4955;
+	native_u16_t local_port_client = 4955;
 	native_u16_t local_port_server = 4950;
 
 	uint8_t status; // presence state
@@ -218,8 +242,27 @@ int main(int argc, const char** argv)
 										salt = "6f7fd17e0eb641abH"; // ~ U15
 										if (crc32::hash((const uint8_t*)salt.data(), salt.size(), initial) != chksum)
 										{
-											std::cout << addr.toString() << " - Checksum mismatch" << std::endl;
-											return;
+											chksum = Endianness::invert(chksum);
+											uint32_t chksum_hi;
+											sr.u32_le(chksum_hi);
+											uint64_t chksum64 = (static_cast<uint64_t>(chksum_hi) << 32) | chksum;
+											//std::cout << "chksum64 = " << std::hex << chksum64 << std::dec << std::endl;
+											salt = "3bd61b742870d0bb3"; // ~ U8
+											md5::State st;
+											st.append((const uint8_t*)data.data() + sr.getPosition(), data.size() - sr.getPosition());
+											st.append(salt.data(), salt.size());
+											union {
+												uint8_t digest[md5::DIGEST_BYTES];
+												uint64_t chksum64;
+											} u;
+											st.finalise();
+											st.getDigest(u.digest);
+											//std::cout << "u.chksum64 = " << std::hex << u.chksum64 << std::dec << std::endl;
+											if (chksum64 != u.chksum64)
+											{
+												std::cout << addr.toString() << " - Checksum mismatch" << std::endl;
+												return;
+											}
 										}
 									}
 								}
@@ -246,17 +289,18 @@ int main(int argc, const char** argv)
 		case 0x74: // Test from server
 			{
 				std::string acctId;
-				sr.str(12, acctId);
 				uint64_t timestamp;
+				uint32_t local_ip;
+				uint16_t local_port;
+				std::string local_addr_str;
+
+				sr.str(12, acctId);
 				if (!is_u27_or_below(salt))
 				{
 					sr.u64_le(timestamp);
 				}
-				uint32_t local_ip;
 				sr.u32_be(local_ip);
-				uint16_t local_port;
 				sr.u16_le(local_port);
-				std::string local_addr_str;
 				if (!is_u15_or_below(salt))
 				{
 					ser_str(sr, salt, local_addr_str);
@@ -275,31 +319,40 @@ int main(int argc, const char** argv)
 				reflexive_port ^= 0xAAAA;
 
 				StringWriter sw;
-				{ uint8_t b = 0x64 /* 25 << 2 */; sw.u8(b); }
-				if (!is_u15_or_below(salt))
+				if (!is_u12_or_below(salt))
 				{
-					{ uint8_t b = 0; sw.u8(b); }
-					sw.u8(packet_id);
-					sw.str(12, acctId);
-					if (!is_u27_or_below(salt))
+					{ uint8_t b = 0x64 /* 25 << 2 */; sw.u8(b); }
+					if (!is_u15_or_below(salt))
 					{
-						sw.u64_le(timestamp);
+						{ uint8_t b = 0; sw.u8(b); }
+						sw.u8(packet_id);
+						sw.str(12, acctId);
+						if (!is_u27_or_below(salt))
+						{
+							sw.u64_le(timestamp);
+						}
+						sw.u32_be(local_ip);
+						sw.u16_le(local_port);
+						ser_str(sw, salt, local_addr_str);
+						sw.u32_be(reflexive_ip);
+						sw.u16_le(reflexive_port);
 					}
-					sw.u32_be(local_ip);
-					sw.u16_le(local_port);
-					ser_str(sw, salt, local_addr_str);
-					sw.u32_be(reflexive_ip);
-					sw.u16_le(reflexive_port);
+					else
+					{
+						sw.u32_be(reflexive_ip);
+						sw.u16_le(reflexive_port);
+						// local addr is not xored in the request, but is expected to be xored in the response
+						local_ip ^= 0xAAAAAAAA;
+						local_port ^= 0xAAAA;
+						sw.u32_be(local_ip);
+						sw.u16_le(local_port);
+					}
 				}
 				else
 				{
-					sw.u32_be(reflexive_ip);
-					sw.u16_le(reflexive_port);
-					// local addr is not xored in the request, but is expected to be xored in the response
-					local_ip ^= 0xAAAAAAAA;
-					local_port ^= 0xAAAA;
-					sw.u32_be(local_ip);
-					sw.u16_le(local_port);
+					{ uint8_t b = 39 << 2; sw.u8(b); }
+					std::string tmp = addr.toString();
+					ser_str(sw, salt, tmp);
 				}
 				s.udpServerSend(addr, packData(sw.data, salt));
 			}
@@ -309,18 +362,33 @@ int main(int argc, const char** argv)
 		case 0x62: // NAT bind for server
 			{
 				std::string acctId;
-				sr.str(12, acctId);
 				uint32_t local_ip;
-				sr.u32_be(local_ip);
 				uint16_t local_port;
-				sr.u16_le(local_port);
-				if (!is_u27_or_below(salt))
-				{
-					sr.skip(2);
-				}
 
-				local_ip ^= 0xAAAAAAAA;
-				local_port ^= 0xAAAA;
+				if (!is_u12_or_below(salt))
+				{
+					sr.str(12, acctId);
+					sr.u32_be(local_ip);
+					sr.u16_le(local_port);
+					local_ip ^= 0xAAAAAAAA;
+					local_port ^= 0xAAAA;
+					if (!is_u27_or_below(salt))
+					{
+						sr.skip(2);
+					}
+				}
+				else
+				{
+					sr.skip(1); // ','
+					std::string acctId_hex;
+					sr.str(24, acctId_hex);
+					acctId = string::hex2bin(acctId_hex);
+					sr.skip(1 + 128 + 1); // ',' NatHash ','
+					SocketAddr sa;
+					sa.fromString(data.substr(sr.getPosition()));
+					local_ip = sa.ip.getV4NativeEndian();
+					local_port = sa.getPort();
+				}
 
 				uint32_t reflexive_ip = addr.ip.getV4NativeEndian();
 				uint16_t reflexive_port = addr.getPort();
@@ -340,18 +408,21 @@ int main(int argc, const char** argv)
 				if (packet_id == 0x42)
 				{
 					data->reflexive_port_client = reflexive_port;
-					//data->local_port_client = local_port;
-					sr.u8(data->status);
-					if (!is_u15_or_below(salt))
-					{
-						sr.skip(1);
-					}
+					data->local_port_client = local_port;
 					std::string presence;
-					ser_str(sr, salt, presence);
+					if (!is_u12_or_below(salt))
+					{
+						sr.u8(data->status);
+						if (!is_u15_or_below(salt))
+						{
+							sr.skip(1);
+						}
+						ser_str(sr, salt, presence);
+					}
 
-					//std::cout << addr.toString() << " - " << string::bin2hex(acctId) << " - NAT bound for client " << string::bin2hex(acctId) << std::endl;
-					//std::cout << addr.toString() << " - " << string::bin2hex(acctId) << " - Client Local Addr: " << IpAddr((native_u32_t)local_ip).toString() << ":" << local_port << std::endl;
-					//std::cout << addr.toString() << " - " << string::bin2hex(acctId) << " - Status: " << (int)data->status << std::endl;
+					//std::cout << addr.toString() << "#" << string::bin2hexLower(acctId) << " - NAT bound for client " << string::bin2hex(acctId) << std::endl;
+					//std::cout << addr.toString() << "#" << string::bin2hexLower(acctId) << " - Client Local Addr: " << IpAddr((native_u32_t)local_ip).toString() << ":" << local_port << std::endl;
+					//std::cout << addr.toString() << "#" << string::bin2hexLower(acctId) << " - Status: " << (int)data->status << std::endl;
 					if (presence != data->presence)
 					{
 						data->presence = std::move(presence);
@@ -362,28 +433,34 @@ int main(int argc, const char** argv)
 				}
 				else
 				{
-					//std::cout << addr.toString() << " - " << string::bin2hex(acctId) << " - Server Local Addr: " << IpAddr((native_u32_t)local_ip).toString() << ":" << local_port << std::endl;
+					//std::cout << addr.toString() << "#" << string::bin2hexLower(acctId) << " - Server Local Addr: " << IpAddr((native_u32_t)local_ip).toString() << ":" << local_port << std::endl;
 
 					data->reflexive_port_server = reflexive_port;
 					data->local_port_server = local_port;
 				}
 				data->last_nat_bind = time::unixSeconds();
 
-				reflexive_ip ^= 0xAAAAAAAA;
-				reflexive_port ^= 0xAAAA;
-
 				StringWriter sw;
-				{ uint8_t b = 0x60 /* 24 << 2 */; sw.u8(b); }
-				if (!is_u15_or_below(salt))
+				if (!is_u12_or_below(salt))
 				{
-					{ uint8_t b = 0; sw.u8(b); } // should be 1 if we supported proxying?
-					if (!is_u27_or_below(salt)) // 2022.04.29.12.53 (~ U31.5) crashes when this field is not given.
+					{ uint8_t b = 0x60 /* 24 << 2 */; sw.u8(b); }
+					if (!is_u15_or_below(salt))
 					{
-						{ uint8_t b = (packet_id == 0x42 ? 1 : 0); sw.u8(b); }
+						{ uint8_t b = 0; sw.u8(b); } // should be 1 if we supported proxying?
+						if (!is_u27_or_below(salt)) // 2022.04.29.12.53 (~ U31.5) crashes when this field is not given.
+						{
+							{ uint8_t b = (packet_id == 0x42 ? 1 : 0); sw.u8(b); }
+						}
 					}
+					reflexive_ip ^= 0xAAAAAAAA;
+					reflexive_port ^= 0xAAAA;
+					sw.u32_be(reflexive_ip);
+					sw.u16_le(reflexive_port);
 				}
-				sw.u32_be(reflexive_ip);
-				sw.u16_le(reflexive_port);
+				else
+				{
+					{ uint8_t b = 37 << 2; sw.u8(b); }
+				}
 				s.udpServerSend(addr, packData(sw.data, salt));
 			}
 			break;
@@ -391,13 +468,26 @@ int main(int argc, const char** argv)
 		case 0x55: // Logout
 			{
 				std::string acctId;
-				sr.str(12, acctId);
+				if (!is_u12_or_below(salt))
+				{
+					sr.str(12, acctId);
+				}
+				else
+				{
+					sr.skip(1); // ','
+					std::string acctId_hex;
+					sr.str(24, acctId_hex);
+					acctId = string::hex2bin(acctId_hex);
+					//sr.skip(1 + 128); // ',' NatHash
+				}
 				account_map.erase(acctId);
+				std::cout << addr.toString() << "#" << string::bin2hexLower(acctId) << " - Logged out" << std::endl;
 			}
 			break;
 
 		case 0x70: // Fast presence query
 		case 0x50: // Rich presence query
+			if (!is_u12_or_below(salt))
 			{
 				std::string acctId;
 				sr.str(12, acctId);
@@ -438,12 +528,19 @@ int main(int argc, const char** argv)
 				}
 				s.udpServerSend(addr, packData(sw.data, salt));
 			}
+			else
+			{
+				// Not used in U8 afaict
+				std::cout << addr.toString() << " - Unknown packet with id " << (int)packet_id << ": " << string::bin2hex(data) << std::endl;
+			}
 			break;
 
-		case 0x72: // Query account server address
+			// "Resolve pending punchthroughs"
+		case 0x52: // Query client addresses
+		case 0x72: // Query server addresses
+			if (!is_u12_or_below(salt))
 			{
-				std::string acctId;
-				sr.str(12, acctId);
+				sr.skip(12); // acctId
 				uint8_t task_id;
 				sr.u8(task_id);
 				sr.skip(1);
@@ -469,7 +566,7 @@ int main(int argc, const char** argv)
 						sw.u32_be(masked_ip);
 					}
 					{
-						uint16_t masked_port = e->second.reflexive_port_server ^ 0xAAAA;
+						uint16_t masked_port = ((packet_id & 0x20) ? e->second.reflexive_port_server : e->second.reflexive_port_client) ^ 0xAAAA;
 						sw.u16_le(masked_port);
 					}
 					{
@@ -477,52 +574,120 @@ int main(int argc, const char** argv)
 						sw.u32_be(masked_ip);
 					}
 					{
-						uint16_t masked_port = e->second.local_port_server ^ 0xAAAA;
+						uint16_t masked_port = ((packet_id & 0x20) ? e->second.local_port_server : e->second.local_port_client) ^ 0xAAAA;
 						sw.u16_le(masked_port);
 					}
 					s.udpServerSend(addr, packData(sw.data, salt));
 				}
 			}
-			break;
-
-		case 0x63: // Introduction request
-		case 0x69: // Relayed introduction request
+			else
 			{
-				std::string acctId;
-				sr.str(12, acctId);
-				uint8_t task_id;
-				sr.u8(task_id);
-				std::string target;
-				sr.str(12, target);
-				if (auto e = account_map.find(target); e != account_map.end())
+				sr.skip(1 + 24 + 1 + 128 + 1); // ',' acctId_hex ',' NatHash ','
+				std::string task_id; sr.str(1, task_id);
+				sr.skip(1); // ','
+				auto arr = string::explode(data.substr(sr.getPosition()), ',');
+				std::string res;
+				for (const auto& acctId_hex : arr)
 				{
-					StringWriter sw;
-					{ uint8_t b = 0x70; sw.u8(b); }
-					sw.u8(task_id);
-					if (!is_u15_or_below(salt))
+					if (auto e = account_map.find(string::hex2bin(acctId_hex)); e != account_map.end())
 					{
-						uint32_t reflexive_ip = addr.ip.getV4NativeEndian();
-						uint16_t reflexive_port = addr.getPort();
-
-						reflexive_ip ^= 0xAAAAAAAA;
-						reflexive_port ^= 0xAAAA;
-
-						{ uint8_t b = 0; sw.u8(b); }
-						sw.str(12, acctId);
-						sw.str(12, target);
-						sw.u32_be(reflexive_ip);
-						sw.u16_le(reflexive_port);
+						res.append(acctId_hex);
+						res.push_back(',');
+						res.append(IpAddr(e->second.reflexive_ip).toString());
+						res.push_back(',');
+						res.append(std::to_string(((packet_id & 0x20) ? e->second.reflexive_port_server : e->second.reflexive_port_client)));
+						res.push_back(',');
 					}
 					else
 					{
-						std::string tmp = string::bin2hexLower(acctId);
-						ser_str(sw, salt, tmp);
-						tmp = string::bin2hexLower(target);
-						ser_str(sw, salt, tmp);
-						tmp = addr.toString();
-						ser_str(sw, salt, tmp);
+						// The response may need some indicator here?
 					}
-					s.udpServerSend(SocketAddr(e->second.reflexive_ip, e->second.reflexive_port_server), packData(sw.data, e->second.salt));
+				}
+				if (!res.empty())
+				{
+					res.pop_back();
+				}
+				StringWriter sw;
+				{ uint8_t b = 28 << 2; sw.u8(b); }
+				ser_str(sw, salt, task_id);
+				ser_str(sw, salt, res);
+				s.udpServerSend(addr, packData(sw.data, salt));
+			}
+			break;
+
+		case 0x43: // Client introduction request
+		case 0x49: // Relayed Client introduction request
+		case 0x63: // Server introduction request
+		case 0x69: // Relayed server introduction request
+			{
+				std::string acctId;
+				uint8_t task_id;
+				std::string target;
+
+				if (!is_u12_or_below(salt))
+				{
+					sr.str(12, acctId);
+					sr.u8(task_id);
+					sr.str(12, target);
+				}
+				else
+				{
+					sr.skip(1); // ','
+					std::string acctId_hex;
+					sr.str(24, acctId_hex);
+					acctId = string::hex2bin(acctId_hex);
+					sr.skip(1 + 128 + 1); // ',' NatHash ','
+					sr.u8(task_id);
+					sr.skip(1); // ','
+					std::string target_hex;
+					sr.str(24, target_hex);
+					target = string::hex2bin(target_hex);
+				}
+
+				if (auto e = account_map.find(target); e != account_map.end())
+				{
+					StringWriter sw;
+					if (!is_u12_or_below(e->second.salt))
+					{
+						{ uint8_t b = 0x70; sw.u8(b); }
+						sw.u8(task_id);
+						if (!is_u15_or_below(e->second.salt))
+						{
+							uint32_t reflexive_ip = addr.ip.getV4NativeEndian();
+							uint16_t reflexive_port = addr.getPort();
+
+							reflexive_ip ^= 0xAAAAAAAA;
+							reflexive_port ^= 0xAAAA;
+
+							{ uint8_t b = 0; sw.u8(b); }
+							sw.str(12, acctId);
+							sw.str(12, target);
+							sw.u32_be(reflexive_ip);
+							sw.u16_le(reflexive_port);
+						}
+						else
+						{
+							std::string tmp = string::bin2hexLower(acctId);
+							ser_str(sw, e->second.salt, tmp);
+							tmp = string::bin2hexLower(target);
+							ser_str(sw, e->second.salt, tmp);
+							tmp = addr.toString();
+							ser_str(sw, e->second.salt, tmp);
+						}
+					}
+					else
+					{
+						{ uint8_t b = 24 << 2; sw.u8(b); }
+						std::string tmp = string::bin2hexLower(acctId);
+						ser_str(sw, e->second.salt, tmp);
+						tmp = string::bin2hexLower(target);
+						ser_str(sw, e->second.salt, tmp);
+						tmp = addr.toString();
+						ser_str(sw, e->second.salt, tmp);
+						tmp = std::string(1, task_id);
+						ser_str(sw, e->second.salt, tmp);
+					}
+					s.udpServerSend(SocketAddr(e->second.reflexive_ip, (packet_id & 0x20) ? e->second.reflexive_port_server : e->second.reflexive_port_client), packData(sw.data, e->second.salt));
 
 					std::cout << addr.toString() << "#" << string::bin2hexLower(acctId) << " - Introduced to " << SocketAddr(e->second.reflexive_ip, e->second.reflexive_port_client).toString() << "#" << string::bin2hexLower(target) << std::endl;
 				}
@@ -531,6 +696,7 @@ int main(int argc, const char** argv)
 
 		case 0x76: // Game invite
 		case 0x79: // Relayed game invite
+			if (!is_u12_or_below(salt))
 			{
 				std::string acctId;
 				sr.str(12, acctId);
@@ -567,9 +733,15 @@ int main(int argc, const char** argv)
 					s.udpServerSend(addr, packData(sw.data, salt));
 				}
 			}
+			else
+			{
+				// Not used in U8 afaict
+				std::cout << addr.toString() << " - Unknown packet with id " << (int)packet_id << ": " << string::bin2hex(data) << std::endl;
+			}
 			break;
 
 		case 0x56: // Game invite response
+			if (!is_u12_or_below(salt))
 			{
 				std::string acctId;
 				sr.str(12, acctId);
@@ -587,9 +759,15 @@ int main(int argc, const char** argv)
 					s.udpServerSend(SocketAddr(e->second.reflexive_ip, e->second.reflexive_port_server), packData(sw.data, e->second.salt));
 				}
 			}
+			else
+			{
+				// Not used in U8 afaict
+				std::cout << addr.toString() << " - Unknown packet with id " << (int)packet_id << ": " << string::bin2hex(data) << std::endl;
+			}
 			break;
 
 		case 0x6a: // Send social change (when accepting a friend request or removing a friend in U39 and below; done via IRC nowadays)
+			if (!is_u12_or_below(salt))
 			{
 				std::string acctId; sr.str(12, acctId);
 				uint8_t task_id; sr.u8(task_id);
@@ -609,9 +787,15 @@ int main(int argc, const char** argv)
 					}
 				}
 			}
+			else
+			{
+				// Not used in U8 afaict
+				std::cout << addr.toString() << " - Unknown packet with id " << (int)packet_id << ": " << string::bin2hex(data) << std::endl;
+			}
 			break;
 
 		case 0x73: // Request friend refresh (when sending a friend request in U39 and below; done via IRC nowadays)
+			if (!is_u12_or_below(salt))
 			{
 				std::string acctId; sr.str(12, acctId);
 				uint8_t unk; sr.u8(unk); // always 0x09 ?
@@ -628,6 +812,11 @@ int main(int argc, const char** argv)
 						std::cout << addr.toString() << "#" << string::bin2hexLower(acctId) << " - Sent friend request refresh " << (int)unk << " to " << SocketAddr(e->second.reflexive_ip, e->second.reflexive_port_client).toString() << "#" << string::bin2hexLower(target) << std::endl;
 					}
 				}
+			}
+			else
+			{
+				// Not used in U8 afaict
+				std::cout << addr.toString() << " - Unknown packet with id " << (int)packet_id << ": " << string::bin2hex(data) << std::endl;
 			}
 			break;
 
