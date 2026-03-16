@@ -18,7 +18,35 @@
 #include <signal.h>
 #endif
 
+#if USE_DTLSBRIDGE
+extern "C"
+{
+	void ReadData(uint8_t* inputData, size_t inputDataLength, uint8_t* pendingSendBuffer, size_t* pendingSendLength, uint8_t decryptedDataBuffer[4096], size_t* decryptedDataLength, const char* endpoint);
+	void WriteData(uint8_t* rawData, size_t rawDataLength, uint8_t* encryptedData, size_t* encryptedDataLength, const char* endpoint);
+	void init();
+}
+#endif
+
 using namespace soup;
+
+static void udp_send(Socket& s, const SocketAddr& addr, const std::string& data, bool is_dtls)
+{
+#if USE_DTLSBRIDGE
+	if (is_dtls)
+	{
+		uint8_t encryptedData[4096];
+		size_t encryptedDataLength = 0;
+		std::string endpoint = addr.toString();
+		WriteData((uint8_t*)data.data(), data.size(), encryptedData, &encryptedDataLength, endpoint.c_str());
+		if (encryptedDataLength > 0)
+		{
+			s.udpServerSend(addr, (const char*)encryptedData, encryptedDataLength);
+		}
+		return;
+	}
+#endif
+	s.udpServerSend(addr, data);
+}
 
 static bool is_u12_or_below(const std::string_view& salt)
 {
@@ -133,7 +161,6 @@ static void ser_str(T& s, const std::string_view& salt, std::string& str)
 
 struct AccountData
 {
-	std::string_view salt;
 	native_u32_t reflexive_ip;
 	native_u32_t local_ip;
 
@@ -141,6 +168,9 @@ struct AccountData
 	native_u16_t reflexive_port_server = 4950;
 	native_u16_t local_port_client = 4955;
 	native_u16_t local_port_server = 4950;
+
+	std::string_view salt;
+	bool is_dtls;
 
 	uint8_t status; // presence state
 	std::string presence;
@@ -161,17 +191,61 @@ struct AccountData
 		ser_str(sw, this->salt, const_cast<std::string&>(session_info));
 		ser_str(sw, this->salt, const_cast<std::string&>(inviter_name));
 		std::string unk_str; ser_str(sw, this->salt, unk_str);
-		s.udpServerSend(SocketAddr(this->reflexive_ip, this->reflexive_port_client), packData(sw.data, this->salt));
+		udp_send(s, SocketAddr(this->reflexive_ip, this->reflexive_port_client), packData(sw.data, this->salt), is_dtls);
 	}
 };
 static std::unordered_map<std::string, AccountData> account_map;
 
 int main(int argc, const char** argv)
 {
+#if USE_DTLSBRIDGE
+	init();
+#endif
+
 	Server serv;
 
 	ServerServiceUdp srv([](Socket& s, SocketAddr&& addr, std::string&& data, ServerServiceUdp&)
 	{
+		bool is_dtls = false;
+#if USE_DTLSBRIDGE
+		{
+			std::string data_copy = data;
+			uint8_t pendingSend[4096];
+			uint8_t decryptedData[4096];
+			size_t pendingSendLength = 0;
+			size_t decryptedDataLength = 0;
+			std::string endpoint = addr.toString();
+			ReadData((uint8_t*)data_copy.data(), data_copy.size(), pendingSend, &pendingSendLength, decryptedData, &decryptedDataLength, endpoint.c_str());
+			if (pendingSendLength > 0)
+			{
+				s.udpServerSend(addr, (const char*)pendingSend, pendingSendLength);
+			}
+			if (decryptedDataLength != 0)
+			{
+				uint8_t AESkey[] = { 0x63, 0x8C, 0x59, 0x2C, 0xE1, 0x57, 0xC2, 0x1B };
+				if (decryptedDataLength == sizeof(AESkey) && memcmp(decryptedData, AESkey, sizeof(AESkey)) == 0)
+				{
+					uint8_t encryptedData[4096];
+					size_t encryptedDataLength = 0;
+					WriteData(AESkey, sizeof(AESkey), encryptedData, &encryptedDataLength, endpoint.c_str());
+					if (encryptedDataLength > 0)
+					{
+						s.udpServerSend(addr, (const char*)encryptedData, encryptedDataLength);
+					}
+					//std::cout << addr.toString() << " - Sent AES key" << std::endl;
+					return;
+				}
+				data = std::string((const char*)decryptedData, decryptedDataLength);
+				is_dtls = true;
+			}
+			else if (pendingSendLength > 0)
+			{
+				// This is some DTLS crap we don't need to process.
+				return;
+			}
+		}
+#endif
+
 		MemoryRefReader sr(data);
 
 		uint8_t unk_byte;
@@ -268,10 +342,21 @@ int main(int argc, const char** argv)
 		}
 		//std::cout << addr.toString() << " - salt = " << salt << std::endl;
 #if DEPLOYMENT
-		if (!is_u32_or_below(salt))
+		if (is_dtls)
 		{
-			std::cout << addr.toString() << " - Cleartext traffic from a post-DTLS version, sus" << std::endl;
-			return;
+			if (salt == "b471e49539930dc9b5a131e6247c7387H")
+			{
+				std::cout << addr.toString() << " - U41 detected, ignoring" << std::endl;
+				return;
+			}
+		}
+		else
+		{
+			if (!is_u32_or_below(salt))
+			{
+				std::cout << addr.toString() << " - Cleartext traffic from a post-DTLS version, ignoring" << std::endl;
+				return;
+			}
 		}
 #endif
 
@@ -348,7 +433,7 @@ int main(int argc, const char** argv)
 					std::string tmp = addr.toString();
 					ser_str(sw, salt, tmp);
 				}
-				s.udpServerSend(addr, packData(sw.data, salt));
+				udp_send(s, addr, packData(sw.data, salt), is_dtls);
 			}
 			break;
 
@@ -399,6 +484,7 @@ int main(int argc, const char** argv)
 				data->reflexive_ip = reflexive_ip;
 				data->local_ip = local_ip;
 				data->salt = salt;
+				data->is_dtls = is_dtls;
 				if (packet_id == 0x42)
 				{
 					data->reflexive_port_client = reflexive_port;
@@ -455,7 +541,7 @@ int main(int argc, const char** argv)
 				{
 					{ uint8_t b = 37 << 2; sw.u8(b); }
 				}
-				s.udpServerSend(addr, packData(sw.data, salt));
+				udp_send(s, addr, packData(sw.data, salt), is_dtls);
 			}
 			break;
 
@@ -520,7 +606,7 @@ int main(int argc, const char** argv)
 						ser_str(sw, salt, str);
 					}
 				}
-				s.udpServerSend(addr, packData(sw.data, salt));
+				udp_send(s, addr, packData(sw.data, salt), is_dtls);
 			}
 			else
 			{
@@ -571,7 +657,7 @@ int main(int argc, const char** argv)
 						uint16_t masked_port = ((packet_id & 0x20) ? e->second.local_port_server : e->second.local_port_client) ^ 0xAAAA;
 						sw.u16_le(masked_port);
 					}
-					s.udpServerSend(addr, packData(sw.data, salt));
+					udp_send(s, addr, packData(sw.data, salt), is_dtls);
 				}
 			}
 			else
@@ -605,7 +691,7 @@ int main(int argc, const char** argv)
 				{ uint8_t b = 28 << 2; sw.u8(b); }
 				ser_str(sw, salt, task_id);
 				ser_str(sw, salt, res);
-				s.udpServerSend(addr, packData(sw.data, salt));
+				udp_send(s, addr, packData(sw.data, salt), is_dtls);
 			}
 			break;
 
@@ -681,7 +767,7 @@ int main(int argc, const char** argv)
 						tmp = std::string(1, task_id);
 						ser_str(sw, e->second.salt, tmp);
 					}
-					s.udpServerSend(SocketAddr(e->second.reflexive_ip, (packet_id & 0x20) ? e->second.reflexive_port_server : e->second.reflexive_port_client), packData(sw.data, e->second.salt));
+					udp_send(s, SocketAddr(e->second.reflexive_ip, (packet_id & 0x20) ? e->second.reflexive_port_server : e->second.reflexive_port_client), packData(sw.data, e->second.salt), e->second.is_dtls);
 
 					std::cout << addr.toString() << "#" << string::bin2hexLower(acctId) << " - Introduced to " << SocketAddr(e->second.reflexive_ip, (packet_id & 0x20) ? e->second.reflexive_port_server : e->second.reflexive_port_client).toString() << "#" << string::bin2hexLower(target) << std::endl;
 				}
@@ -724,7 +810,7 @@ int main(int argc, const char** argv)
 					sw.str(12, target);
 					uint8_t status = 0;
 					sw.u8(status);
-					s.udpServerSend(addr, packData(sw.data, salt));
+					udp_send(s, addr, packData(sw.data, salt), is_dtls);
 				}
 			}
 			else
@@ -750,7 +836,7 @@ int main(int argc, const char** argv)
 					sw.str(12, target);
 					sw.str(12, acctId);
 					sw.u8(status);
-					s.udpServerSend(SocketAddr(e->second.reflexive_ip, e->second.reflexive_port_server), packData(sw.data, e->second.salt));
+					udp_send(s, SocketAddr(e->second.reflexive_ip, e->second.reflexive_port_server), packData(sw.data, e->second.salt), e->second.is_dtls);
 				}
 			}
 			else
@@ -776,7 +862,7 @@ int main(int argc, const char** argv)
 						{ uint8_t b = 0xac; sw.u8(b); }
 						sw.u8(task_id);
 						ser_str(sw, e->second.salt, json);
-						s.udpServerSend(SocketAddr(e->second.reflexive_ip, e->second.reflexive_port_client), packData(sw.data, e->second.salt));
+						udp_send(s, SocketAddr(e->second.reflexive_ip, e->second.reflexive_port_client), packData(sw.data, e->second.salt), e->second.is_dtls);
 						std::cout << addr.toString() << "#" << string::bin2hexLower(acctId) << " - Sent social change " << (int)task_id << " " << json << " to " << SocketAddr(e->second.reflexive_ip, e->second.reflexive_port_client).toString() << "#" << string::bin2hexLower(target) << std::endl;
 					}
 				}
@@ -802,7 +888,7 @@ int main(int argc, const char** argv)
 						StringWriter sw;
 						{ uint8_t b = 0x78; sw.u8(b); }
 						sw.u8(unk);
-						s.udpServerSend(SocketAddr(e->second.reflexive_ip, e->second.reflexive_port_client), packData(sw.data, e->second.salt));
+						udp_send(s, SocketAddr(e->second.reflexive_ip, e->second.reflexive_port_client), packData(sw.data, e->second.salt), e->second.is_dtls);
 						std::cout << addr.toString() << "#" << string::bin2hexLower(acctId) << " - Sent friend request refresh " << (int)unk << " to " << SocketAddr(e->second.reflexive_ip, e->second.reflexive_port_client).toString() << "#" << string::bin2hexLower(target) << std::endl;
 					}
 				}

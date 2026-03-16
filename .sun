@@ -4,3 +4,7 @@ require Soup/soup
 arg -O3
 
 arg -DDEPLOYMENT=false
+
+arg -DUSE_DTLSBRIDGE=true
+linker_arg -L.
+linker_arg -lDTLSBridge
