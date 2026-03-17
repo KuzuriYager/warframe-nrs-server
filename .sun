@@ -5,6 +5,6 @@ arg -O3
 
 arg -DDEPLOYMENT=false
 
-arg -DUSE_DTLSBRIDGE=true
+arg -DUSE_DTLSBRIDGE=false
 linker_arg -L.
 linker_arg -lDTLSBridge
