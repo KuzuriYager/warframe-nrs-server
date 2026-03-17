@@ -191,7 +191,30 @@ struct AccountData
 		ser_str(sw, this->salt, const_cast<std::string&>(session_info));
 		ser_str(sw, this->salt, const_cast<std::string&>(inviter_name));
 		std::string unk_str; ser_str(sw, this->salt, unk_str);
-		udp_send(s, SocketAddr(this->reflexive_ip, this->reflexive_port_client), packData(sw.data, this->salt), is_dtls);
+		udp_send(s, SocketAddr(this->reflexive_ip, this->reflexive_port_client), packData(sw.data, this->salt), this->is_dtls);
+	}
+
+	void sendSocialChange(Socket& s, uint8_t type, const std::string& json)
+	{
+		if (!is_u12_or_below(this->salt))
+		{
+			StringWriter sw;
+			{ uint8_t b = 0xac; sw.u8(b); }
+			sw.u8(type);
+			ser_str(sw, this->salt, const_cast<std::string&>(json));
+			udp_send(s, SocketAddr(this->reflexive_ip, this->reflexive_port_client), packData(sw.data, this->salt), this->is_dtls);
+		}
+	}
+
+	void sendFriendRefresh(Socket& s, uint8_t unk = 9)
+	{
+		if (!is_u12_or_below(this->salt))
+		{
+			StringWriter sw;
+			{ uint8_t b = 0x78; sw.u8(b); }
+			sw.u8(unk);
+			udp_send(s, SocketAddr(this->reflexive_ip, this->reflexive_port_client), packData(sw.data, this->salt), this->is_dtls);
+		}
 	}
 };
 static std::unordered_map<std::string, AccountData> account_map;
@@ -850,7 +873,7 @@ int main(int argc, const char** argv)
 			if (!is_u12_or_below(salt))
 			{
 				std::string acctId; sr.str(12, acctId);
-				uint8_t task_id; sr.u8(task_id);
+				uint8_t type; sr.u8(type); // 29 = accept friend request, 30 = remove friend
 				uint8_t num_changes = 0; sr.u8(num_changes);
 				while (num_changes--)
 				{
@@ -858,12 +881,8 @@ int main(int argc, const char** argv)
 					std::string json; ser_str(sr, salt, json);
 					if (auto e = account_map.find(target); e != account_map.end())
 					{
-						StringWriter sw;
-						{ uint8_t b = 0xac; sw.u8(b); }
-						sw.u8(task_id);
-						ser_str(sw, e->second.salt, json);
-						udp_send(s, SocketAddr(e->second.reflexive_ip, e->second.reflexive_port_client), packData(sw.data, e->second.salt), e->second.is_dtls);
-						std::cout << addr.toString() << "#" << string::bin2hexLower(acctId) << " - Sent social change " << (int)task_id << " " << json << " to " << SocketAddr(e->second.reflexive_ip, e->second.reflexive_port_client).toString() << "#" << string::bin2hexLower(target) << std::endl;
+						e->second.sendSocialChange(s, type, json);
+						std::cout << addr.toString() << "#" << string::bin2hexLower(acctId) << " - Sent social change " << (int)type << " " << json << " to " << SocketAddr(e->second.reflexive_ip, e->second.reflexive_port_client).toString() << "#" << string::bin2hexLower(target) << std::endl;
 					}
 				}
 			}
@@ -885,10 +904,7 @@ int main(int argc, const char** argv)
 					std::string target; sr.str(12, target);
 					if (auto e = account_map.find(target); e != account_map.end())
 					{
-						StringWriter sw;
-						{ uint8_t b = 0x78; sw.u8(b); }
-						sw.u8(unk);
-						udp_send(s, SocketAddr(e->second.reflexive_ip, e->second.reflexive_port_client), packData(sw.data, e->second.salt), e->second.is_dtls);
+						e->second.sendFriendRefresh(s, unk);
 						std::cout << addr.toString() << "#" << string::bin2hexLower(acctId) << " - Sent friend request refresh " << (int)unk << " to " << SocketAddr(e->second.reflexive_ip, e->second.reflexive_port_client).toString() << "#" << string::bin2hexLower(target) << std::endl;
 					}
 				}
@@ -897,6 +913,34 @@ int main(int argc, const char** argv)
 			{
 				// Not used in U8 afaict
 				std::cout << addr.toString() << " - Unknown packet with id " << (int)packet_id << ": " << string::bin2hex(data) << std::endl;
+			}
+			break;
+
+		case 0x00: // Custom message from SpaceNinjaServer
+			{
+				std::string message = data.substr(sr.getPosition());
+				std::cout << addr.toString() << " - " << message << std::endl;
+				auto arr = string::explode(message, ',');
+				if (arr.size() == 3)
+				{
+					if (auto e = account_map.find(string::hex2bin(arr[2])); e != account_map.end())
+					{
+						if (arr[0] == "addPendingFriend")
+						{
+							e->second.sendFriendRefresh(s, 9);
+						}
+						else if (arr[0] == "addFriend")
+						{
+							//e->second.sendSocialChange(s, 29, "{\"id\":\"" + arr[1] + "\",\"avatarImage\":\"\",\"level\":0}");
+							//e->second.sendSocialChange(s, 29, "{\"id\":\"" + arr[1] + "\"}");
+							e->second.sendFriendRefresh(s, 9); // Unfaithful, but this way the avatarImage and level don't get reset by this notification.
+						}
+						else if (arr[0] == "removeFriend")
+						{
+							e->second.sendSocialChange(s, 30, "{\"id\":\"" + arr[1] + "\"}");
+						}
+					}
+				}
 			}
 			break;
 
