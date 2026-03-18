@@ -122,18 +122,29 @@ static std::string packData(const std::string& data, const std::string_view& sal
 	//std::cout << "Server says: " << string::bin2hex(sw.data) << std::endl;
 
 #if true
-	if (uint16_t decompressed_size = sw.data.size() - 1;
-		decompressed_size > 0x3F
-		)
 	{
+		uint16_t decompressed_size = sw.data.size() - 1;
 		uint8_t buffer[0x1000];
-		if (auto compressed_size = lzf::compress(sw.data.data() + 1, sw.data.size() - 1, buffer + 2, sizeof(buffer) - 2);
-			compressed_size != 0 && (compressed_size + 2) < sw.data.size()
-			)
+		if (decompressed_size <= 0x3F)
 		{
-			buffer[0] = (decompressed_size >> 6) | 0x80;
-			buffer[1] = (decompressed_size & 0x3F) | 0xC0;
-			return std::string((const char*)buffer, compressed_size + 2);
+			if (auto compressed_size = lzf::compress(sw.data.data() + 1, sw.data.size() - 1, buffer + 1, sizeof(buffer) - 1);
+				compressed_size != 0 && (compressed_size + 1) < sw.data.size()
+				)
+			{
+				buffer[0] = decompressed_size;
+				return std::string((const char*)buffer, compressed_size + 1);
+			}
+		}
+		else
+		{
+			if (auto compressed_size = lzf::compress(sw.data.data() + 1, sw.data.size() - 1, buffer + 2, sizeof(buffer) - 2);
+				compressed_size != 0 && (compressed_size + 2) < sw.data.size()
+				)
+			{
+				buffer[0] = (decompressed_size >> 6) | 0x80;
+				buffer[1] = (decompressed_size & 0x3F) | 0xC0;
+				return std::string((const char*)buffer, compressed_size + 2);
+			}
 		}
 	}
 #endif
