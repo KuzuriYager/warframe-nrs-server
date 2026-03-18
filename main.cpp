@@ -340,6 +340,7 @@ static network_u16_t setup_proxying(network_u32_t client_ip, network_u16_t clien
 	{
 		if (proxy.client_ip == client_ip && proxy.server_ip == server_ip && proxy.client_port == client_port && proxy.server_port == server_port)
 		{
+			proxy.last_traffic = time::unixSeconds();
 			return proxy.port;
 		}
 		if (time::unixSecondsSince(proxy.last_traffic) > 30)
@@ -348,6 +349,7 @@ static network_u16_t setup_proxying(network_u32_t client_ip, network_u16_t clien
 			proxy.server_ip = server_ip;
 			proxy.client_port = client_port;
 			proxy.server_port = server_port;
+			proxy.last_traffic = time::unixSeconds();
 			return proxy.port;
 		}
 	}
