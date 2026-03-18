@@ -6,6 +6,7 @@
 #include <lzf.hpp>
 #include <md5.hpp>
 #include <MemoryRefReader.hpp>
+#include <netInfo.hpp>
 #include <Server.hpp>
 #include <ServerServiceUdp.hpp>
 #include <Socket.hpp>
@@ -20,6 +21,9 @@
 
 #define ENABLE_SHADOW_REALM DEPLOYMENT
 #define BANISH_U41_1_TO_SHADOW_REALM DEPLOYMENT
+
+#define MAX_PROXY_CONNECTIONS 100
+#define FORCE_PROXY_CONNECTIONS false
 
 #if USE_DTLSBRIDGE
 extern "C"
@@ -236,6 +240,119 @@ struct AccountData
 	}
 };
 static std::unordered_map<std::string, AccountData> account_map;
+
+enum IntroductionType : uint8_t
+{
+	IT_FROM_PEER = 0,
+	IT_TO_PROXY = 1,
+	IT_VIA_PROXY = 2, // "potential proxy"
+};
+
+static void send_introduction(Socket& s, const std::string& from_acctId, const std::string& to_acctId, const SocketAddr& from_addr, const SocketAddr& to_addr, IntroductionType it, uint8_t task_id, const std::string_view& salt, bool is_dtls)
+{
+	StringWriter sw;
+	if (!is_u12_or_below(salt))
+	{
+		{ uint8_t b = 0x70; sw.u8(b); }
+		sw.u8(task_id);
+		if (!is_u15_or_below(salt))
+		{
+			uint32_t ip = from_addr.ip.getV4NativeEndian();
+			uint16_t port = from_addr.getPort();
+
+			ip ^= 0xAAAAAAAA;
+			port ^= 0xAAAA;
+
+			{ uint8_t b = it; sw.u8(b); }
+			sw.str(12, from_acctId);
+			sw.str(12, to_acctId);
+			sw.u32_be(ip);
+			sw.u16_le(port);
+		}
+		else
+		{
+			std::string tmp = string::bin2hexLower(from_acctId);
+			ser_str(sw, salt, tmp);
+			tmp = string::bin2hexLower(to_acctId);
+			ser_str(sw, salt, tmp);
+			tmp = from_addr.toString();
+			ser_str(sw, salt, tmp);
+		}
+	}
+	else
+	{
+		{ uint8_t b = 24 << 2; sw.u8(b); }
+		std::string tmp = string::bin2hexLower(from_acctId);
+		ser_str(sw, salt, tmp);
+		tmp = string::bin2hexLower(to_acctId);
+		ser_str(sw, salt, tmp);
+		tmp = from_addr.toString();
+		ser_str(sw, salt, tmp);
+		tmp = std::string(1, task_id);
+		ser_str(sw, salt, tmp);
+	}
+	udp_send(s, to_addr, packData(sw.data, salt), is_dtls);
+}
+
+struct Proxy : public ServerServiceUdp
+{
+	network_u32_t client_ip;
+	network_u32_t server_ip;
+	network_u16_t client_port;
+	network_u16_t server_port;
+	network_u16_t port;
+	time_t last_traffic = 0;
+
+	Proxy()
+		: ServerServiceUdp(&staticCallback)
+	{
+	}
+
+	static void staticCallback(Socket& s, SocketAddr&& addr, std::string&& data, ServerServiceUdp& srv)
+	{
+		static_cast<Proxy&>(srv).callback(s, std::move(addr), std::move(data));
+	}
+
+	void callback(Socket& s, SocketAddr&& addr, std::string&& data)
+	{
+		if (addr.ip.getV4() == client_ip && addr.port == client_port)
+		{
+			last_traffic = time::unixSeconds();
+			s.udpServerSend(SocketAddr(server_ip, server_port), std::move(data));
+		}
+		else if (addr.ip.getV4() == server_ip && addr.port == server_port)
+		{
+			last_traffic = time::unixSeconds();
+			s.udpServerSend(SocketAddr(client_ip, client_port), std::move(data));
+		}
+		else
+		{
+			std::cout << "Unsolicited traffic on proxy port " << Endianness::toNative(port) << " from " << addr.toString() << std::endl;
+		}
+	}
+};
+static network_u32_t proxy_ip;
+static Proxy proxies[MAX_PROXY_CONNECTIONS];
+
+static network_u16_t setup_proxying(network_u32_t client_ip, network_u16_t client_port, network_u32_t server_ip, network_u16_t server_port)
+{
+	for (auto& proxy : proxies)
+	{
+		if (proxy.client_ip == client_ip && proxy.server_ip == server_ip && proxy.client_port == client_port && proxy.server_port == server_port)
+		{
+			return proxy.port;
+		}
+		if (time::unixSecondsSince(proxy.last_traffic) > 30)
+		{
+			proxy.client_ip = client_ip;
+			proxy.server_ip = server_ip;
+			proxy.client_port = client_port;
+			proxy.server_port = server_port;
+			return proxy.port;
+		}
+	}
+	return 0;
+}
 
 int main(int argc, const char** argv)
 {
@@ -533,7 +650,9 @@ int main(int argc, const char** argv)
 						sr.u8(data->status);
 						if (!is_u15_or_below(salt))
 						{
-							sr.skip(1);
+							uint8_t num_proxy_connections = 0;
+							sr.u8(num_proxy_connections);
+							sr.skip(num_proxy_connections * (12 + 1)); // seems to be account id of target followed by 0x00
 						}
 						ser_str(sr, salt, presence);
 					}
@@ -576,7 +695,7 @@ int main(int argc, const char** argv)
 					{ uint8_t b = 0x60 /* 24 << 2 */; sw.u8(b); }
 					if (!is_u15_or_below(salt))
 					{
-						{ uint8_t b = 0; sw.u8(b); } // should be 1 if we supported proxying?
+						{ uint8_t b = (MAX_PROXY_CONNECTIONS > 0 ? 1 : 0); sw.u8(b); } // 0 = no proxying, 1 = yes proxying
 						if (!is_u27_or_below(salt)) // 2022.04.29.12.53 (~ U31.5) crashes when this field is not given.
 						{
 							{ uint8_t b = (packet_id == 0x42 ? 1 : 0); sw.u8(b); }
@@ -683,6 +802,7 @@ int main(int argc, const char** argv)
 			// "Resolve pending punchthroughs"
 		case 0x52: // Query client addresses
 		case 0x72: // Query server addresses
+			//std::cout << addr.toString() << " - Request resolve pending punchthroughs" << std::endl;
 			if (!is_u12_or_below(salt))
 			{
 #if ENABLE_SHADOW_REALM
@@ -719,7 +839,11 @@ int main(int argc, const char** argv)
 						{ uint8_t b = 4; sw.u8(b); } // result 0 bitflags
 					}
 					{
+#if FORCE_PROXY_CONNECTIONS
+						uint32_t masked_ip = SOUP_IPV4(10, 0, 0, 0) ^ 0xAAAAAAAA;
+#else
 						uint32_t masked_ip = e->second.reflexive_ip ^ 0xAAAAAAAA;
+#endif
 						sw.u32_be(masked_ip);
 					}
 					{
@@ -727,7 +851,11 @@ int main(int argc, const char** argv)
 						sw.u16_le(masked_port);
 					}
 					{
+#if FORCE_PROXY_CONNECTIONS
+						uint32_t masked_ip = SOUP_IPV4(10, 0, 0, 0) ^ 0xAAAAAAAA;
+#else
 						uint32_t masked_ip = e->second.local_ip ^ 0xAAAAAAAA;
+#endif
 						sw.u32_be(masked_ip);
 					}
 					{
@@ -773,9 +901,10 @@ int main(int argc, const char** argv)
 			break;
 
 		case 0x43: // Client introduction request
-		case 0x49: // Relayed Client introduction request
+		case 0x49: // Relayed client introduction request
 		case 0x63: // Server introduction request
 		case 0x69: // Relayed server introduction request
+			//std::cout << addr.toString() << " - Introduction request " << string::hex(packet_id) << std::endl;
 			{
 				std::string acctId;
 				uint8_t task_id;
@@ -811,55 +940,44 @@ int main(int argc, const char** argv)
 				}
 #endif
 
+#if !FORCE_PROXY_CONNECTIONS
 				if (auto e = account_map.find(target); e != account_map.end())
 				{
-					StringWriter sw;
-					if (!is_u12_or_below(e->second.salt))
-					{
-						{ uint8_t b = 0x70; sw.u8(b); }
-						sw.u8(task_id);
-						if (!is_u15_or_below(e->second.salt))
-						{
-							uint32_t reflexive_ip = addr.ip.getV4NativeEndian();
-							uint16_t reflexive_port = addr.getPort();
-
-							reflexive_ip ^= 0xAAAAAAAA;
-							reflexive_port ^= 0xAAAA;
-
-							{ uint8_t b = 0; sw.u8(b); }
-							sw.str(12, acctId);
-							sw.str(12, target);
-							sw.u32_be(reflexive_ip);
-							sw.u16_le(reflexive_port);
-						}
-						else
-						{
-							std::string tmp = string::bin2hexLower(acctId);
-							ser_str(sw, e->second.salt, tmp);
-							tmp = string::bin2hexLower(target);
-							ser_str(sw, e->second.salt, tmp);
-							tmp = addr.toString();
-							ser_str(sw, e->second.salt, tmp);
-						}
-					}
-					else
-					{
-						{ uint8_t b = 24 << 2; sw.u8(b); }
-						std::string tmp = string::bin2hexLower(acctId);
-						ser_str(sw, e->second.salt, tmp);
-						tmp = string::bin2hexLower(target);
-						ser_str(sw, e->second.salt, tmp);
-						tmp = addr.toString();
-						ser_str(sw, e->second.salt, tmp);
-						tmp = std::string(1, task_id);
-						ser_str(sw, e->second.salt, tmp);
-					}
-					udp_send(s, SocketAddr(e->second.reflexive_ip, (packet_id & 0x20) ? e->second.reflexive_port_server : e->second.reflexive_port_client), packData(sw.data, e->second.salt), e->second.is_dtls);
-
-					std::cout << addr.toString() << "#" << string::bin2hexLower(acctId) << " - Introduced to " << SocketAddr(e->second.reflexive_ip, (packet_id & 0x20) ? e->second.reflexive_port_server : e->second.reflexive_port_client).toString() << "#" << string::bin2hexLower(target) << std::endl;
+					SocketAddr to_addr(e->second.reflexive_ip, (packet_id & 0x20) ? e->second.reflexive_port_server : e->second.reflexive_port_client);
+					send_introduction(s, acctId, target, addr, to_addr, IT_FROM_PEER, task_id, e->second.salt, e->second.is_dtls);
+					std::cout << addr.toString() << "#" << string::bin2hexLower(acctId) << " - Introduced to " << to_addr.toString() << "#" << string::bin2hexLower(target) << std::endl;
 				}
+#endif
 			}
 			break;
+
+#if MAX_PROXY_CONNECTIONS > 0
+		case 0x78: // Proxy request
+			if (!is_u12_or_below(salt))
+			{
+				std::string acctId;
+				sr.str(12, acctId);
+				uint8_t task_id;
+				sr.u8(task_id);
+				std::string target;
+				sr.str(12, target);
+				if (auto e = account_map.find(target); e != account_map.end())
+				{
+					SocketAddr to_addr(e->second.reflexive_ip, e->second.reflexive_port_server);
+					if (auto proxy_port = setup_proxying(addr.ip.getV4(), addr.port, to_addr.ip.getV4(), to_addr.port))
+					{
+						send_introduction(s, target, acctId, SocketAddr(proxy_ip, proxy_port), addr, IT_TO_PROXY, task_id, salt, is_dtls);
+						send_introduction(s, acctId, target, SocketAddr(proxy_ip, proxy_port), to_addr, IT_VIA_PROXY, task_id, e->second.salt, e->second.is_dtls);
+						std::cout << addr.toString() << "#" << string::bin2hexLower(acctId) << " - Obtained proxy port " << Endianness::toNative(proxy_port) << " to connect to " << string::bin2hexLower(target) << std::endl;
+					}
+				}
+			}
+			else
+			{
+				std::cout << addr.toString() << " - Unknown packet with id " << (int)packet_id << ": " << string::bin2hex(data) << std::endl;
+			}
+			break;
+#endif
 
 		case 0x76: // Game invite
 		case 0x79: // Relayed game invite
@@ -1032,6 +1150,14 @@ int main(int argc, const char** argv)
 		}
 	});
 
+#if MAX_PROXY_CONNECTIONS > 0
+	{
+		auto addr = netInfo::getPublicAddressV4();
+		std::cout << "proxy_ip = " << addr.toString() << std::endl;
+		proxy_ip = addr.getV4();
+	}
+#endif
+
 #if DEPLOYMENT
 	if (!serv.bindUdp(4950, &srv))
 	{
@@ -1053,6 +1179,19 @@ int main(int argc, const char** argv)
 		return 1;
 	}
 	std::cout << "Bound to UDP/1234" << std::endl;
+#endif
+
+#if MAX_PROXY_CONNECTIONS > 0
+	uint16_t port = 6900;
+	for (auto& proxy : proxies)
+	{
+		while (!serv.bindUdp(port, &proxy))
+		{
+			++port;
+		}
+		proxy.port = Endianness::toNetwork(port);
+		++port;
+	}
 #endif
 
 #ifdef DOCKER
