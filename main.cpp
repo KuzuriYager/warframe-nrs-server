@@ -24,8 +24,9 @@
 #if USE_DTLSBRIDGE
 extern "C"
 {
-	void ReadData(uint8_t* inputData, size_t inputDataLength, uint8_t* pendingSendBuffer, size_t* pendingSendLength, uint8_t decryptedDataBuffer[4096], size_t* decryptedDataLength, const char* endpoint);
-	void WriteData(uint8_t* rawData, size_t rawDataLength, uint8_t* encryptedData, size_t* encryptedDataLength, const char* endpoint);
+	// inputData may be modified. Returns true if input data could successfully be decoded as DTLS traffic.
+	bool ReadData(uint8_t* inputData, size_t inputDataLength, uint8_t* pendingSendBuffer, size_t* pendingSendLength, uint8_t decryptedDataBuffer[4096], size_t* decryptedDataLength, const char* endpoint);
+	void WriteData(const uint8_t* rawData, size_t rawDataLength, uint8_t* encryptedData, size_t* encryptedDataLength, const char* endpoint);
 	void init();
 }
 #endif
@@ -40,7 +41,7 @@ static void udp_send(Socket& s, const SocketAddr& addr, const std::string& data,
 		uint8_t encryptedData[4096];
 		size_t encryptedDataLength = 0;
 		std::string endpoint = addr.toString();
-		WriteData((uint8_t*)data.data(), data.size(), encryptedData, &encryptedDataLength, endpoint.c_str());
+		WriteData((const uint8_t*)data.data(), data.size(), encryptedData, &encryptedDataLength, endpoint.c_str());
 		if (encryptedDataLength > 0)
 		{
 			s.udpServerSend(addr, (const char*)encryptedData, encryptedDataLength);
@@ -244,14 +245,14 @@ int main(int argc, const char** argv)
 			size_t pendingSendLength = 0;
 			size_t decryptedDataLength = 0;
 			std::string endpoint = addr.toString();
-			ReadData((uint8_t*)data_copy.data(), data_copy.size(), pendingSend, &pendingSendLength, decryptedData, &decryptedDataLength, endpoint.c_str());
+			is_dtls = ReadData((uint8_t*)data_copy.data(), data_copy.size(), pendingSend, &pendingSendLength, decryptedData, &decryptedDataLength, endpoint.c_str());
 			if (pendingSendLength > 0)
 			{
 				s.udpServerSend(addr, (const char*)pendingSend, pendingSendLength);
 			}
 			if (decryptedDataLength != 0)
 			{
-				uint8_t AESkey[] = { 0x63, 0x8C, 0x59, 0x2C, 0xE1, 0x57, 0xC2, 0x1B };
+				const uint8_t AESkey[] = { 0x63, 0x8C, 0x59, 0x2C, 0xE1, 0x57, 0xC2, 0x1B };
 				if (decryptedDataLength == sizeof(AESkey) && memcmp(decryptedData, AESkey, sizeof(AESkey)) == 0)
 				{
 					uint8_t encryptedData[4096];
@@ -265,11 +266,9 @@ int main(int argc, const char** argv)
 					return;
 				}
 				data = std::string((const char*)decryptedData, decryptedDataLength);
-				is_dtls = true;
 			}
-			else if (pendingSendLength > 0)
+			else if (is_dtls)
 			{
-				// This is some DTLS crap we don't need to process.
 				return;
 			}
 		}
