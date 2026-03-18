@@ -18,6 +18,9 @@
 #include <signal.h>
 #endif
 
+#define ENABLE_SHADOW_REALM DEPLOYMENT
+#define BANISH_U41_1_TO_SHADOW_REALM DEPLOYMENT
+
 #if USE_DTLSBRIDGE
 extern "C"
 {
@@ -171,6 +174,9 @@ struct AccountData
 
 	std::string_view salt;
 	bool is_dtls;
+#if ENABLE_SHADOW_REALM
+	bool in_shadow_realm = false;
+#endif
 
 	uint8_t status; // presence state
 	std::string presence;
@@ -365,21 +371,10 @@ int main(int argc, const char** argv)
 		}
 		//std::cout << addr.toString() << " - salt = " << salt << std::endl;
 #if DEPLOYMENT
-		if (is_dtls)
+		if (!is_dtls && !is_u32_or_below(salt))
 		{
-			if (salt == "b471e49539930dc9b5a131e6247c7387H")
-			{
-				std::cout << addr.toString() << " - U41 detected, ignoring" << std::endl;
-				return;
-			}
-		}
-		else
-		{
-			if (!is_u32_or_below(salt))
-			{
-				std::cout << addr.toString() << " - Cleartext traffic from a post-DTLS version, ignoring" << std::endl;
-				return;
-			}
+			std::cout << addr.toString() << " - Cleartext traffic from a post-DTLS version, ignoring" << std::endl;
+			return;
 		}
 #endif
 
@@ -407,6 +402,16 @@ int main(int argc, const char** argv)
 				{
 					ser_str(sr, salt, local_addr_str);
 				}
+
+#if ENABLE_SHADOW_REALM
+				if (auto e = account_map.find(acctId); e != account_map.end())
+				{
+					if (e->second.in_shadow_realm)
+					{
+						break;
+					}
+				}
+#endif
 
 				//std::cout << addr.toString() << " - local_addr: " << IpAddr((native_u32_t)local_ip).toString() << ":" << local_port << std::endl;
 				if (!is_u15_or_below(salt))
@@ -526,10 +531,22 @@ int main(int argc, const char** argv)
 					//std::cout << addr.toString() << "#" << string::bin2hexLower(acctId) << " - NAT bound for client " << string::bin2hex(acctId) << std::endl;
 					//std::cout << addr.toString() << "#" << string::bin2hexLower(acctId) << " - Client Local Addr: " << IpAddr((native_u32_t)local_ip).toString() << ":" << local_port << std::endl;
 					//std::cout << addr.toString() << "#" << string::bin2hexLower(acctId) << " - Status: " << (int)data->status << std::endl;
-					if (presence != data->presence)
+					if (
+						presence != data->presence
+#if ENABLE_SHADOW_REALM
+						&& !data->in_shadow_realm
+#endif
+						)
 					{
 						data->presence = std::move(presence);
 						std::cout << addr.toString() << "#" << string::bin2hexLower(acctId) << " - Updated presence: " << data->presence << std::endl;
+#if ENABLE_SHADOW_REALM && BANISH_U41_1_TO_SHADOW_REALM
+						if (data->presence.find("{\"l\":") != std::string::npos || data->presence.find(",\"l\":") != std::string::npos)
+						{
+							data->in_shadow_realm = true;
+							std::cout << addr.toString() << "#" << string::bin2hexLower(acctId) << " - Banished to the shadow realm" << std::endl;
+						}
+#endif
 					}
 
 					//data->sendGameInvite(s, acctId, acctId, R"({})", "Welcome :)", 0, 0);
@@ -599,6 +616,14 @@ int main(int argc, const char** argv)
 				uint8_t num_queries = 0;
 				sr.u8(num_queries);
 
+#if ENABLE_SHADOW_REALM
+				bool in_shadow_realm;
+				{
+					auto e = account_map.find(acctId);
+					in_shadow_realm = e != account_map.end() && e->second.in_shadow_realm;
+				}
+#endif
+
 				StringWriter sw;
 				{ uint8_t b = 0x6c; sw.u8(b); }
 				sw.u8(task_id);
@@ -613,6 +638,12 @@ int main(int argc, const char** argv)
 					{
 						if (time::unixSecondsSince(e->second.last_nat_bind) <= 120)
 						{
+#if ENABLE_SHADOW_REALM
+							if (in_shadow_realm)
+							{
+								goto _write_empty_presence;
+							}
+#endif
 							sw.u8(e->second.status);
 							if (packet_id == 0x50)
 							{
@@ -622,6 +653,7 @@ int main(int argc, const char** argv)
 						}
 						account_map.erase(e);
 					}
+				_write_empty_presence:
 					{ uint8_t b = 0; sw.u8(b); }
 					if (packet_id == 0x50)
 					{
@@ -643,7 +675,19 @@ int main(int argc, const char** argv)
 		case 0x72: // Query server addresses
 			if (!is_u12_or_below(salt))
 			{
+#if ENABLE_SHADOW_REALM
+				std::string acctId;
+				sr.str(12, acctId);
+				if (auto e = account_map.find(acctId); e != account_map.end())
+				{
+					if (e->second.in_shadow_realm)
+					{
+						break;
+					}
+				}
+#else
 				sr.skip(12); // acctId
+#endif
 				uint8_t task_id;
 				sr.u8(task_id);
 				sr.skip(1);
@@ -747,6 +791,16 @@ int main(int argc, const char** argv)
 					target = string::hex2bin(target_hex);
 				}
 
+#if ENABLE_SHADOW_REALM
+				if (auto e = account_map.find(acctId); e != account_map.end())
+				{
+					if (e->second.in_shadow_realm)
+					{
+						break;
+					}
+				}
+#endif
+
 				if (auto e = account_map.find(target); e != account_map.end())
 				{
 					StringWriter sw;
@@ -803,6 +857,15 @@ int main(int argc, const char** argv)
 			{
 				std::string acctId;
 				sr.str(12, acctId);
+#if ENABLE_SHADOW_REALM
+				if (auto e = account_map.find(acctId); e != account_map.end())
+				{
+					if (e->second.in_shadow_realm)
+					{
+						break;
+					}
+				}
+#endif
 				uint8_t bindingServerId = 0;
 				if (!is_u15_or_below(salt))
 				{
@@ -848,6 +911,15 @@ int main(int argc, const char** argv)
 			{
 				std::string acctId;
 				sr.str(12, acctId);
+#if ENABLE_SHADOW_REALM
+				if (auto e = account_map.find(acctId); e != account_map.end())
+				{
+					if (e->second.in_shadow_realm)
+					{
+						break;
+					}
+				}
+#endif
 				std::string target;
 				sr.str(12, target);
 				uint8_t status; // 1 = received. 3 = declined. 4 = failed to join.
