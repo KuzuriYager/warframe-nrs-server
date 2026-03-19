@@ -1,12 +1,27 @@
 #include <iostream>
 #include <unordered_map>
 
+#define ENABLE_SHADOW_REALM DEPLOYMENT
+#define BANISH_U41_1_TO_SHADOW_REALM DEPLOYMENT
+
+#define IS_LAN_DEPLOYMENT false
+#define MAX_PROXY_CONNECTIONS 100
+#define FORCE_PROXY_CONNECTIONS false
+
 #include <crc32.hpp>
 #include <crc32c.hpp>
+/*#if IS_LAN_DEPLOYMENT
+#include <dhcp.hpp>
+#endif*/
 #include <lzf.hpp>
 #include <md5.hpp>
 #include <MemoryRefReader.hpp>
+#if IS_LAN_DEPLOYMENT
+#include <netAdaptor.hpp>
+#endif
+#if MAX_PROXY_CONNECTIONS > 0
 #include <netInfo.hpp>
+#endif
 #include <Server.hpp>
 #include <ServerServiceUdp.hpp>
 #include <Socket.hpp>
@@ -18,12 +33,6 @@
 #ifdef DOCKER
 #include <signal.h>
 #endif
-
-#define ENABLE_SHADOW_REALM DEPLOYMENT
-#define BANISH_U41_1_TO_SHADOW_REALM DEPLOYMENT
-
-#define MAX_PROXY_CONNECTIONS 100
-#define FORCE_PROXY_CONNECTIONS false
 
 #if USE_DTLSBRIDGE
 extern "C"
@@ -331,7 +340,7 @@ struct Proxy : public ServerServiceUdp
 		}
 	}
 };
-static network_u32_t proxy_ip;
+static network_u32_t proxy_ip = 0;
 static Proxy proxies[MAX_PROXY_CONNECTIONS];
 
 static network_u16_t setup_proxying(network_u32_t client_ip, network_u16_t client_port, network_u32_t server_ip, network_u16_t server_port)
@@ -1152,7 +1161,25 @@ int main(int argc, const char** argv)
 		}
 	});
 
+	IpAddr bind_addr;
+#if IS_LAN_DEPLOYMENT
+	for (const auto& ad : netAdaptor::getAll())
+	{
+		//if (auto info = dhcp::requestInfo(ad.ip_addr); info.isValid())
+		if (ad.name.find("Virtual") == std::string::npos)
+		{
+			bind_addr = ad.ip_addr;
+			std::cout << "Using " << ad.name << " (" << bind_addr.toString() << ")" << std::endl;
+			break;
+		}
+	}
+  #if IS_LAN_DEPLOYMENT
+	proxy_ip = bind_addr.getV4();
+  #endif
+#endif
+
 #if MAX_PROXY_CONNECTIONS > 0
+	if (proxy_ip == 0)
 	{
 		auto addr = netInfo::getPublicAddressV4();
 		std::cout << "proxy_ip = " << addr.toString() << std::endl;
@@ -1161,21 +1188,21 @@ int main(int argc, const char** argv)
 #endif
 
 #if DEPLOYMENT
-	if (!serv.bindUdp(4950, &srv))
+	if (!serv.bindUdp(bind_addr, 4950, &srv))
 	{
 		std::cout << "Failed to bind UDP/4950" << std::endl;
 		return 1;
 	}
 	std::cout << "Bound to UDP/4950" << std::endl;
 
-	if (!serv.bindUdp(3960, &srv))
+	if (!serv.bindUdp(bind_addr, 3960, &srv))
 	{
 		std::cout << "Failed to bind UDP/3960" << std::endl;
 		return 1;
 	}
 	std::cout << "Bound to UDP/3960" << std::endl;
 #else
-	if (!serv.bindUdp(1234, &srv))
+	if (!serv.bindUdp(bind_addr, 1234, &srv))
 	{
 		std::cout << "Failed to bind UDP/1234" << std::endl;
 		return 1;
@@ -1187,7 +1214,7 @@ int main(int argc, const char** argv)
 	uint16_t port = 4200;
 	for (auto& proxy : proxies)
 	{
-		while (!serv.bindUdp(port, &proxy))
+		while (!serv.bindUdp(bind_addr, port, &proxy))
 		{
 			++port;
 		}
