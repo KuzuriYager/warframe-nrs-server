@@ -1184,7 +1184,7 @@ int main(int argc, const char** argv)
 #endif
 
 #if MAX_PROXY_CONNECTIONS > 0
-	uint16_t port = 6900;
+	uint16_t port = 4200;
 	for (auto& proxy : proxies)
 	{
 		while (!serv.bindUdp(port, &proxy))
