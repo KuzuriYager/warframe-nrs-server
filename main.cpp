@@ -4,7 +4,7 @@
 #define ENABLE_SHADOW_REALM DEPLOYMENT
 #define BANISH_U41_1_TO_SHADOW_REALM DEPLOYMENT
 
-#define IS_LAN_DEPLOYMENT false
+#define IS_LAN_DEPLOYMENT !DEPLOYMENT
 #define MAX_PROXY_CONNECTIONS 100
 #define FORCE_PROXY_CONNECTIONS false
 
@@ -303,6 +303,7 @@ static void send_introduction(Socket& s, const std::string& from_acctId, const s
 	udp_send(s, to_addr, packData(sw.data, salt), is_dtls);
 }
 
+#if MAX_PROXY_CONNECTIONS > 0
 struct Proxy : public ServerServiceUdp
 {
 	network_u32_t client_ip;
@@ -364,6 +365,7 @@ static network_u16_t setup_proxying(network_u32_t client_ip, network_u16_t clien
 	}
 	return 0;
 }
+#endif
 
 int main(int argc, const char** argv)
 {
@@ -1173,12 +1175,10 @@ int main(int argc, const char** argv)
 			break;
 		}
 	}
-  #if IS_LAN_DEPLOYMENT
-	proxy_ip = bind_addr.getV4();
-  #endif
 #endif
 
 #if MAX_PROXY_CONNECTIONS > 0
+	proxy_ip = bind_addr.getV4();
 	if (proxy_ip == 0)
 	{
 		auto addr = netInfo::getPublicAddressV4();
