@@ -436,7 +436,7 @@ int main(int argc, const char** argv)
 			if (decompressed_size != expected_decompressed_size)
 			{
 				std::cout << addr.toString() << " - Decompressed size mismatch (got " << decompressed_size << ", expected " << expected_decompressed_size << "): " << string::bin2hex(data) << std::endl;
-				//return;
+				return;
 			}
 			data = std::string(buffer, decompressed_size);
 			sr = MemoryRefReader(data);
@@ -495,7 +495,7 @@ int main(int argc, const char** argv)
 											//std::cout << "u.chksum64 = " << std::hex << u.chksum64 << std::dec << std::endl;
 											if (chksum64 != u.chksum64)
 											{
-												std::cout << addr.toString() << " - Checksum mismatch" << std::endl;
+												std::cout << addr.toString() << " - Checksum mismatch: " << string::bin2hex(data) << std::endl;
 												return;
 											}
 										}
