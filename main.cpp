@@ -346,6 +346,7 @@ static Proxy proxies[MAX_PROXY_CONNECTIONS];
 
 static network_u16_t setup_proxying(network_u32_t client_ip, network_u16_t client_port, network_u32_t server_ip, network_u16_t server_port)
 {
+	Proxy* free_proxy = nullptr;
 	for (auto& proxy : proxies)
 	{
 		if (proxy.client_ip == client_ip && proxy.server_ip == server_ip && proxy.client_port == client_port && proxy.server_port == server_port)
@@ -353,15 +354,19 @@ static network_u16_t setup_proxying(network_u32_t client_ip, network_u16_t clien
 			proxy.last_traffic = time::unixSeconds();
 			return proxy.port;
 		}
-		if (time::unixSecondsSince(proxy.last_traffic) > 30)
+		if (free_proxy == nullptr && time::unixSecondsSince(proxy.last_traffic) > 30)
 		{
-			proxy.client_ip = client_ip;
-			proxy.server_ip = server_ip;
-			proxy.client_port = client_port;
-			proxy.server_port = server_port;
-			proxy.last_traffic = time::unixSeconds();
-			return proxy.port;
+			free_proxy = &proxy;
 		}
+	}
+	if (free_proxy)
+	{
+		free_proxy->client_ip = client_ip;
+		free_proxy->server_ip = server_ip;
+		free_proxy->client_port = client_port;
+		free_proxy->server_port = server_port;
+		free_proxy->last_traffic = time::unixSeconds();
+		return free_proxy->port;
 	}
 	return 0;
 }
