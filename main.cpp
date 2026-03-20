@@ -329,13 +329,15 @@ struct Proxy : public ServerServiceUdp
 
 	void callback(Socket& s, SocketAddr&& addr, std::string&& data)
 	{
-		if (addr.ip.getV4() == client_ip && addr.port == client_port)
+		if (addr.ip.getV4() == client_ip /*&& addr.port == client_port*/)
 		{
+			client_port = addr.port;
 			last_traffic = time::unixSeconds();
 			s.udpServerSend(SocketAddr(server_ip, server_port), std::move(data));
 		}
-		else if (addr.ip.getV4() == server_ip && addr.port == server_port)
+		else if (addr.ip.getV4() == server_ip /*&& addr.port == server_port*/)
 		{
+			server_port = addr.port;
 			last_traffic = time::unixSeconds();
 			s.udpServerSend(SocketAddr(client_ip, client_port), std::move(data));
 		}
@@ -350,9 +352,13 @@ static Proxy proxies[MAX_PROXY_CONNECTIONS];
 
 static network_u16_t get_proxy(network_u32_t client_ip, network_u16_t client_port, network_u32_t server_ip, network_u16_t server_port)
 {
+	if (client_ip == server_ip)
+	{
+		return 0;
+	}
 	for (auto& proxy : proxies)
 	{
-		if (proxy.client_ip == client_ip && proxy.server_ip == server_ip && proxy.client_port == client_port && proxy.server_port == server_port)
+		if (proxy.client_ip == client_ip && proxy.server_ip == server_ip /*&& proxy.client_port == client_port && proxy.server_port == server_port*/)
 		{
 			proxy.last_traffic = time::unixSeconds();
 			return proxy.port;
@@ -363,10 +369,14 @@ static network_u16_t get_proxy(network_u32_t client_ip, network_u16_t client_por
 
 static network_u16_t setup_proxying(network_u32_t client_ip, network_u16_t client_port, network_u32_t server_ip, network_u16_t server_port)
 {
+	if (client_ip == server_ip)
+	{
+		return 0;
+	}
 	Proxy* free_proxy = nullptr;
 	for (auto& proxy : proxies)
 	{
-		if (proxy.client_ip == client_ip && proxy.server_ip == server_ip && proxy.client_port == client_port && proxy.server_port == server_port)
+		if (proxy.client_ip == client_ip && proxy.server_ip == server_ip /*&& proxy.client_port == client_port && proxy.server_port == server_port*/)
 		{
 			proxy.last_traffic = time::unixSeconds();
 			return proxy.port;
