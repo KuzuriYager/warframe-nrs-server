@@ -77,6 +77,7 @@ static bool is_u12_or_below(const std::string_view& salt)
 static bool is_u15_or_below(const std::string_view& salt)
 {
 	return salt == "6f7fd17e0eb641abH"
+		|| salt == "6f7fd17e0eb641abE"
 		|| is_u12_or_below(salt)
 		;
 }
@@ -533,22 +534,26 @@ int main(int argc, const char** argv)
 											salt = "6f7fd17e0eb641abH"; // ~ U15
 											if (crc32::hash((const uint8_t*)salt.data(), salt.size(), initial) != chksum)
 											{
-												chksum = Endianness::invert(chksum);
-												uint32_t chksum_hi;
-												sr.u32_le(chksum_hi);
-												uint64_t chksum64 = (static_cast<uint64_t>(chksum_hi) << 32) | chksum;
-												//std::cout << "chksum64 = " << std::hex << chksum64 << std::dec << std::endl;
-												salt = "6f7fd17e0eb641ab7"; // ~ U10.8
-												if (md5_checksum(data.data() + sr.getPosition(), data.size() - sr.getPosition(), salt) != chksum64)
+												salt = "6f7fd17e0eb641abE"; // ~ U13
+												if (crc32::hash((const uint8_t*)salt.data(), salt.size(), initial) != chksum)
 												{
-													salt = "6f7fd17e0eb641ab6"; // ~ U10.3
+													chksum = Endianness::invert(chksum);
+													uint32_t chksum_hi;
+													sr.u32_le(chksum_hi);
+													uint64_t chksum64 = (static_cast<uint64_t>(chksum_hi) << 32) | chksum;
+													//std::cout << "chksum64 = " << std::hex << chksum64 << std::dec << std::endl;
+													salt = "6f7fd17e0eb641ab7"; // ~ U10.8
 													if (md5_checksum(data.data() + sr.getPosition(), data.size() - sr.getPosition(), salt) != chksum64)
 													{
-														salt = "3bd61b742870d0bb3"; // ~ U8
+														salt = "6f7fd17e0eb641ab6"; // ~ U10.3
 														if (md5_checksum(data.data() + sr.getPosition(), data.size() - sr.getPosition(), salt) != chksum64)
 														{
-															std::cout << addr.toString() << " - Checksum mismatch: " << string::bin2hex(data) << std::endl;
-															return;
+															salt = "3bd61b742870d0bb3"; // ~ U8
+															if (md5_checksum(data.data() + sr.getPosition(), data.size() - sr.getPosition(), salt) != chksum64)
+															{
+																std::cout << addr.toString() << " - Checksum mismatch: " << string::bin2hex(data) << std::endl;
+																return;
+															}
 														}
 													}
 												}
