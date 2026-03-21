@@ -80,13 +80,20 @@ static bool is_u15_or_below(const std::string_view& salt)
 		;
 }
 
+static bool is_u15_14_or_below(const std::string_view& salt)
+{
+	return salt == "6f7fd17e0eb641abN"
+		|| is_u15_or_below(salt)
+		;
+}
+
 static bool is_u27_or_below(const std::string_view& salt)
 {
 	return salt == "b471e49539930dc9b5a131e6247c7387D"
 		|| salt == "b471e49539930dc9b5a131e6247c7387B"
 		|| salt == "b471e49539930dc9b5a131e6247c7387A"
 		|| salt == "6f7fd17e0eb641abQ"
-		|| is_u15_or_below(salt)
+		|| is_u15_14_or_below(salt)
 		;
 }
 
@@ -227,7 +234,10 @@ struct AccountData
 		sw.str(12, inviter_acctId);
 		if (!is_u15_or_below(salt))
 		{
-			sw.u8(bindingServerId);
+			if (!is_u15_14_or_below(salt))
+			{
+				sw.u8(bindingServerId);
+			}
 			sw.str(12, invitee_acctId);
 		}
 		sw.u8(presence_state);
@@ -516,22 +526,26 @@ int main(int argc, const char** argv)
 									salt = "6f7fd17e0eb641abQ"; // < U18.18
 									if (crc32::hash((const uint8_t*)salt.data(), salt.size(), initial) != chksum)
 									{
-										salt = "6f7fd17e0eb641abH"; // ~ U15
+										salt = "6f7fd17e0eb641abN"; // ~ U15.14
 										if (crc32::hash((const uint8_t*)salt.data(), salt.size(), initial) != chksum)
 										{
-											chksum = Endianness::invert(chksum);
-											uint32_t chksum_hi;
-											sr.u32_le(chksum_hi);
-											uint64_t chksum64 = (static_cast<uint64_t>(chksum_hi) << 32) | chksum;
-											//std::cout << "chksum64 = " << std::hex << chksum64 << std::dec << std::endl;
-											salt = "6f7fd17e0eb641ab7"; // ~ U10
-											if (md5_checksum(data.data() + sr.getPosition(), data.size() - sr.getPosition(), salt) != chksum64)
+											salt = "6f7fd17e0eb641abH"; // ~ U15
+											if (crc32::hash((const uint8_t*)salt.data(), salt.size(), initial) != chksum)
 											{
-												salt = "3bd61b742870d0bb3"; // ~ U8
+												chksum = Endianness::invert(chksum);
+												uint32_t chksum_hi;
+												sr.u32_le(chksum_hi);
+												uint64_t chksum64 = (static_cast<uint64_t>(chksum_hi) << 32) | chksum;
+												//std::cout << "chksum64 = " << std::hex << chksum64 << std::dec << std::endl;
+												salt = "6f7fd17e0eb641ab7"; // ~ U10
 												if (md5_checksum(data.data() + sr.getPosition(), data.size() - sr.getPosition(), salt) != chksum64)
 												{
-													std::cout << addr.toString() << " - Checksum mismatch: " << string::bin2hex(data) << std::endl;
-													return;
+													salt = "3bd61b742870d0bb3"; // ~ U8
+													if (md5_checksum(data.data() + sr.getPosition(), data.size() - sr.getPosition(), salt) != chksum64)
+													{
+														std::cout << addr.toString() << " - Checksum mismatch: " << string::bin2hex(data) << std::endl;
+														return;
+													}
 												}
 											}
 										}
@@ -603,9 +617,18 @@ int main(int argc, const char** argv)
 				if (!is_u12_or_below(salt))
 				{
 					{ uint8_t b = 0x64 /* 25 << 2 */; sw.u8(b); }
+					if (is_u15_14_or_below(salt))
+					{
+						// local addr is not xored in the request, but is expected to be xored in the response
+						local_ip ^= 0xAAAAAAAA;
+						local_port ^= 0xAAAA;
+					}
 					if (!is_u15_or_below(salt))
 					{
-						{ uint8_t b = 0; sw.u8(b); }
+						if (!is_u15_14_or_below(salt))
+						{
+							{ uint8_t bindingServerId = 0; sw.u8(bindingServerId); }
+						}
 						sw.u8(packet_id);
 						sw.str(12, acctId);
 						if (!is_u27_or_below(salt))
@@ -622,9 +645,6 @@ int main(int argc, const char** argv)
 					{
 						sw.u32_be(reflexive_ip);
 						sw.u16_le(reflexive_port);
-						// local addr is not xored in the request, but is expected to be xored in the response
-						local_ip ^= 0xAAAAAAAA;
-						local_port ^= 0xAAAA;
 						sw.u32_be(local_ip);
 						sw.u16_le(local_port);
 					}
@@ -1101,7 +1121,7 @@ int main(int argc, const char** argv)
 				}
 #endif
 				uint8_t bindingServerId = 0;
-				if (!is_u15_or_below(salt))
+				if (!is_u15_14_or_below(salt))
 				{
 					sr.u8(bindingServerId);
 				}
@@ -1121,7 +1141,7 @@ int main(int argc, const char** argv)
 				{
 					e->second.sendGameInvite(s, acctId, target, session_info, inviter_name, bindingServerId, presence_state);
 				}
-				else if (!is_u15_or_below(salt)) // Invite responses were introduced some time after U15
+				else if (!is_u15_14_or_below(salt)) // Invite responses were introduced some time after U15.14
 				{
 					// Send game invite response with status 0 for offline
 					StringWriter sw;
@@ -1141,7 +1161,7 @@ int main(int argc, const char** argv)
 			break;
 
 		case 0x56: // Game invite response
-			if (!is_u12_or_below(salt))
+			if (!is_u15_14_or_below(salt))
 			{
 				std::string acctId;
 				sr.str(12, acctId);
@@ -1170,7 +1190,6 @@ int main(int argc, const char** argv)
 			}
 			else
 			{
-				// Not used in U8 afaict
 				std::cout << addr.toString() << " - Unknown packet with id " << (int)packet_id << ": " << string::bin2hex(data) << std::endl;
 			}
 			break;
