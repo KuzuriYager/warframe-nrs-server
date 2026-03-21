@@ -1003,20 +1003,20 @@ int main(int argc, const char** argv)
 					_finish_query:
 						res.push_back(',');
 					}
-					else
-					{
-						// The response may need some indicator here?
-					}
 				}
-				if (!res.empty())
+				if (res.empty())
+				{
+					// Seemingly no valid way to respond... just let client time out?
+				}
+				else
 				{
 					res.pop_back();
+					StringWriter sw;
+					{ uint8_t b = 28 << 2; sw.u8(b); }
+					ser_str(sw, salt, task_id);
+					ser_str(sw, salt, res);
+					udp_send(s, addr, packData(sw.data, salt), is_dtls);
 				}
-				StringWriter sw;
-				{ uint8_t b = 28 << 2; sw.u8(b); }
-				ser_str(sw, salt, task_id);
-				ser_str(sw, salt, res);
-				udp_send(s, addr, packData(sw.data, salt), is_dtls);
 			}
 			break;
 
