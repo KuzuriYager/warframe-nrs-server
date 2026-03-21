@@ -6,6 +6,7 @@
 
 #define IS_LAN_DEPLOYMENT !DEPLOYMENT
 #define MAX_PROXY_CONNECTIONS 100
+#define PROXYING_FOR_LEGACY false
 #define FORCE_PROXY_CONNECTIONS false
 
 #include <crc32.hpp>
@@ -215,7 +216,7 @@ struct AccountData
 
 	time_t last_nat_bind;
 
-#if MAX_PROXY_CONNECTIONS > 0
+#if MAX_PROXY_CONNECTIONS > 0 && PROXYING_FOR_LEGACY
 	std::unordered_set<std::string> queried_by; // tracking U8 queries to swoop in with potential proxying
 #endif
 
@@ -682,7 +683,7 @@ int main(int argc, const char** argv)
 				{
 					data = &account_map.emplace(acctId, AccountData{}).first->second;
 				}
-#if MAX_PROXY_CONNECTIONS > 0
+#if MAX_PROXY_CONNECTIONS > 0 && PROXYING_FOR_LEGACY
 				if (data->reflexive_ip != reflexive_ip || data->local_ip != local_ip)
 				{
 					data->queried_by.clear();
@@ -694,7 +695,7 @@ int main(int argc, const char** argv)
 				data->is_dtls = is_dtls;
 				if (packet_id == 0x42)
 				{
-#if MAX_PROXY_CONNECTIONS > 0
+#if MAX_PROXY_CONNECTIONS > 0 && PROXYING_FOR_LEGACY
 					if (data->reflexive_port_client != reflexive_port || data->local_port_client != local_port)
 					{
 						data->queried_by.clear();
@@ -742,7 +743,7 @@ int main(int argc, const char** argv)
 				{
 					//std::cout << addr.toString() << "#" << string::bin2hexLower(acctId) << " - Server Local Addr: " << IpAddr((native_u32_t)local_ip).toString() << ":" << local_port << std::endl;
 
-#if MAX_PROXY_CONNECTIONS > 0
+#if MAX_PROXY_CONNECTIONS > 0 && PROXYING_FOR_LEGACY
 					if (data->reflexive_port_server != reflexive_port || data->local_port_server != local_port)
 					{
 						data->queried_by.clear();
@@ -950,7 +951,7 @@ int main(int argc, const char** argv)
 					{
 						res.append(target_hex);
 						res.push_back(',');
-#if MAX_PROXY_CONNECTIONS > 0
+#if MAX_PROXY_CONNECTIONS > 0 && PROXYING_FOR_LEGACY
 						if (e->second.queried_by.find(acctId) != e->second.queried_by.end())
 						{
 							if (auto proxy_port = setup_proxying(addr.ip.getV4(), addr.port, Endianness::toNetwork(e->second.reflexive_ip), Endianness::toNetwork(((packet_id & 0x20) ? e->second.reflexive_port_server : e->second.reflexive_port_client))))
