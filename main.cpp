@@ -993,13 +993,28 @@ int main(int argc, const char** argv)
 							e->second.queried_by.emplace(acctId);
 						}
 #endif
+						const bool is_same_lan = (addr.ip.getV4NativeEndian() == e->second.reflexive_ip);
 #if FORCE_PROXY_CONNECTIONS
 						res.append("10.0.0.0");
 #else
-						res.append(IpAddr(e->second.reflexive_ip).toString());
+						if (is_same_lan)
+						{
+							res.append(IpAddr(e->second.local_ip).toString());
+						}
+						else
+						{
+							res.append(IpAddr(e->second.reflexive_ip).toString());
+						}
 #endif
 						res.push_back(',');
-						res.append(std::to_string(((packet_id & 0x20) ? e->second.reflexive_port_server : e->second.reflexive_port_client)));
+						if (is_same_lan)
+						{
+							res.append(std::to_string((packet_id & 0x20) ? e->second.local_port_server : e->second.local_port_client));
+						}
+						else
+						{
+							res.append(std::to_string((packet_id & 0x20) ? e->second.reflexive_port_server : e->second.reflexive_port_client));
+						}
 					_finish_query:
 						res.push_back(',');
 					}
