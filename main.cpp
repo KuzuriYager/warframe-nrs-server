@@ -94,6 +94,20 @@ static bool is_u32_or_below(const std::string_view& salt)
 		;
 }
 
+static uint64_t md5_checksum(const char* data, size_t size, const std::string_view& salt)
+{
+	md5::State st;
+	st.append(data, size);
+	st.append(salt.data(), salt.size());
+	union {
+		uint8_t digest[md5::DIGEST_BYTES];
+		uint64_t chksum64;
+	} u;
+	st.finalise();
+	st.getDigest(u.digest);
+	return u.chksum64;
+}
+
 static std::string packData(const std::string& data, const std::string_view& salt)
 {
 	StringWriter sw;
@@ -120,16 +134,7 @@ static std::string packData(const std::string& data, const std::string_view& sal
 	}
 	else
 	{
-		md5::State st;
-		st.append((const uint8_t*)sw.data.data() + 9, sw.data.size() - 9);
-		st.append(salt.data(), salt.size());
-		union {
-			uint8_t digest[md5::DIGEST_BYTES];
-			uint64_t chksum64;
-		} u;
-		st.finalise();
-		st.getDigest(u.digest);
-		*(uint64_t*)(sw.data.data() + 1) = u.chksum64;
+		*(uint64_t*)(sw.data.data() + 1) = md5_checksum(sw.data.data() + 9, sw.data.size() - 9, salt);
 	}
 
 	//std::cout << "Server says: " << string::bin2hex(sw.data) << std::endl;
@@ -517,17 +522,7 @@ int main(int argc, const char** argv)
 											uint64_t chksum64 = (static_cast<uint64_t>(chksum_hi) << 32) | chksum;
 											//std::cout << "chksum64 = " << std::hex << chksum64 << std::dec << std::endl;
 											salt = "3bd61b742870d0bb3"; // ~ U8
-											md5::State st;
-											st.append((const uint8_t*)data.data() + sr.getPosition(), data.size() - sr.getPosition());
-											st.append(salt.data(), salt.size());
-											union {
-												uint8_t digest[md5::DIGEST_BYTES];
-												uint64_t chksum64;
-											} u;
-											st.finalise();
-											st.getDigest(u.digest);
-											//std::cout << "u.chksum64 = " << std::hex << u.chksum64 << std::dec << std::endl;
-											if (chksum64 != u.chksum64)
+											if (md5_checksum(data.data() + sr.getPosition(), data.size() - sr.getPosition(), salt) != chksum64)
 											{
 												std::cout << addr.toString() << " - Checksum mismatch: " << string::bin2hex(data) << std::endl;
 												return;
