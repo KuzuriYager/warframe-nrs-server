@@ -993,28 +993,13 @@ int main(int argc, const char** argv)
 							e->second.queried_by.emplace(acctId);
 						}
 #endif
-						const bool is_same_lan = (addr.ip.getV4NativeEndian() == e->second.reflexive_ip);
 #if FORCE_PROXY_CONNECTIONS
 						res.append("10.0.0.0");
 #else
-						if (is_same_lan)
-						{
-							res.append(IpAddr(e->second.local_ip).toString());
-						}
-						else
-						{
-							res.append(IpAddr(e->second.reflexive_ip).toString());
-						}
+						res.append(IpAddr(e->second.reflexive_ip).toString());
 #endif
 						res.push_back(',');
-						if (is_same_lan)
-						{
-							res.append(std::to_string((packet_id & 0x20) ? e->second.local_port_server : e->second.local_port_client));
-						}
-						else
-						{
-							res.append(std::to_string((packet_id & 0x20) ? e->second.reflexive_port_server : e->second.reflexive_port_client));
-						}
+						res.append(std::to_string((packet_id & 0x20) ? e->second.reflexive_port_server : e->second.reflexive_port_client));
 					_finish_query:
 						res.push_back(',');
 					}
@@ -1065,15 +1050,21 @@ int main(int argc, const char** argv)
 					target = string::hex2bin(target_hex);
 				}
 
-#if ENABLE_SHADOW_REALM
+				native_u32_t local_ip = 0;
+				native_u16_t local_port_client;
+				native_u16_t local_port_server;
 				if (auto e = account_map.find(acctId); e != account_map.end())
 				{
+#if ENABLE_SHADOW_REALM
 					if (e->second.in_shadow_realm)
 					{
 						break;
 					}
-				}
 #endif
+					local_ip = e->second.local_ip;
+					local_port_client = e->second.local_port_client;
+					local_port_server = e->second.local_port_server;
+				}
 
 				if (auto e = account_map.find(target); e != account_map.end())
 				{
@@ -1090,6 +1081,11 @@ int main(int argc, const char** argv)
 					}
 #endif
 #if !FORCE_PROXY_CONNECTIONS
+					if (is_u12_or_below(salt) && local_ip)
+					{
+						send_introduction(s, acctId, target, SocketAddr(local_ip, local_port_client), to_addr, IT_FROM_PEER, task_id, e->second.salt, e->second.is_dtls);
+						send_introduction(s, acctId, target, SocketAddr(local_ip, local_port_server), to_addr, IT_FROM_PEER, task_id, e->second.salt, e->second.is_dtls);
+					}
 					send_introduction(s, acctId, target, addr, to_addr, IT_FROM_PEER, task_id, e->second.salt, e->second.is_dtls);
 					std::cout << addr.toString() << "#" << string::bin2hexLower(acctId) << " - Introduced to " << to_addr.toString() << "#" << string::bin2hexLower(target) << std::endl;
 #endif
