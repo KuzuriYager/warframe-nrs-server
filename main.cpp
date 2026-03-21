@@ -66,7 +66,7 @@ static void udp_send(Socket& s, const SocketAddr& addr, const std::string& data,
 	s.udpServerSend(addr, data);
 }
 
-static bool is_u12_or_below(const std::string_view& salt)
+static bool is_u10_or_below(const std::string_view& salt)
 {
 	return salt == "6f7fd17e0eb641ab7"
 		|| salt == "6f7fd17e0eb641ab6"
@@ -74,11 +74,18 @@ static bool is_u12_or_below(const std::string_view& salt)
 		;
 }
 
+static bool is_u11_or_below(const std::string_view& salt)
+{
+	return salt == "6f7fd17e0eb641abC"
+		|| is_u10_or_below(salt)
+		;
+}
+
 static bool is_u15_or_below(const std::string_view& salt)
 {
 	return salt == "6f7fd17e0eb641abH"
 		|| salt == "6f7fd17e0eb641abE"
-		|| is_u12_or_below(salt)
+		|| is_u11_or_below(salt)
 		;
 }
 
@@ -106,6 +113,13 @@ static bool is_u32_or_below(const std::string_view& salt)
 		;
 }
 
+static bool is_u35_or_below(const std::string_view& salt)
+{
+	return salt == "b471e49539930dc9b5a131e6247c7387F"
+		|| is_u32_or_below(salt)
+		;
+}
+
 static uint64_t md5_checksum(const char* data, size_t size, const std::string_view& salt)
 {
 	md5::State st;
@@ -124,14 +138,14 @@ static std::string packData(const std::string& data, const std::string_view& sal
 {
 	StringWriter sw;
 
-	sw.skip(!is_u12_or_below(salt) ? 5 : 9); // placeholder for compression byte + CRC
+	sw.skip(!is_u11_or_below(salt) ? 5 : 9); // placeholder for compression byte + CRC
 
 	uint32_t magic = 0x80000000;
 	sw.u32_le(magic);
 
 	sw.str_lp<u16_le_t>(data);
 
-	if (!is_u12_or_below(salt))
+	if (!is_u11_or_below(salt))
 	{
 		if (!is_u32_or_below(salt))
 		{
@@ -180,13 +194,6 @@ static std::string packData(const std::string& data, const std::string_view& sal
 #endif
 
 	SOUP_MOVE_RETURN(sw.data);
-}
-
-static bool is_u35_or_below(const std::string_view& salt)
-{
-	return salt == "b471e49539930dc9b5a131e6247c7387F"
-		|| is_u32_or_below(salt)
-		;
 }
 
 template <typename T>
@@ -251,7 +258,7 @@ struct AccountData
 
 	void sendSocialChange(Socket& s, uint8_t type, const std::string& json)
 	{
-		if (!is_u12_or_below(this->salt))
+		if (!is_u11_or_below(this->salt))
 		{
 			StringWriter sw;
 			{ uint8_t b = 0xac; sw.u8(b); }
@@ -263,7 +270,7 @@ struct AccountData
 
 	void sendFriendRefresh(Socket& s, uint8_t unk = 9)
 	{
-		if (!is_u12_or_below(this->salt))
+		if (!is_u10_or_below(this->salt))
 		{
 			StringWriter sw;
 			{ uint8_t b = 0x78; sw.u8(b); }
@@ -284,9 +291,9 @@ enum IntroductionType : uint8_t
 static void send_introduction(Socket& s, const std::string& from_acctId, const std::string& to_acctId, const SocketAddr& from_addr, const SocketAddr& to_addr, IntroductionType it, uint8_t task_id, const std::string_view& salt, bool is_dtls)
 {
 	StringWriter sw;
-	if (!is_u12_or_below(salt))
+	if (!is_u10_or_below(salt)) // >= U11
 	{
-		{ uint8_t b = 0x70; sw.u8(b); }
+		{ uint8_t b = 0x70 /* 28 << 2 */; sw.u8(b); }
 		sw.u8(task_id);
 		if (!is_u15_or_below(salt))
 		{
@@ -542,17 +549,21 @@ int main(int argc, const char** argv)
 													sr.u32_le(chksum_hi);
 													uint64_t chksum64 = (static_cast<uint64_t>(chksum_hi) << 32) | chksum;
 													//std::cout << "chksum64 = " << std::hex << chksum64 << std::dec << std::endl;
-													salt = "6f7fd17e0eb641ab7"; // ~ U10.8
+													salt = "6f7fd17e0eb641abC"; // ~ U11
 													if (md5_checksum(data.data() + sr.getPosition(), data.size() - sr.getPosition(), salt) != chksum64)
 													{
-														salt = "6f7fd17e0eb641ab6"; // ~ U10.3
+														salt = "6f7fd17e0eb641ab7"; // ~ U10.8
 														if (md5_checksum(data.data() + sr.getPosition(), data.size() - sr.getPosition(), salt) != chksum64)
 														{
-															salt = "3bd61b742870d0bb3"; // ~ U8
+															salt = "6f7fd17e0eb641ab6"; // ~ U10.3
 															if (md5_checksum(data.data() + sr.getPosition(), data.size() - sr.getPosition(), salt) != chksum64)
 															{
-																std::cout << addr.toString() << " - Checksum mismatch: " << string::bin2hex(data) << std::endl;
-																return;
+																salt = "3bd61b742870d0bb3"; // ~ U8
+																if (md5_checksum(data.data() + sr.getPosition(), data.size() - sr.getPosition(), salt) != chksum64)
+																{
+																	std::cout << addr.toString() << " - Checksum mismatch: " << string::bin2hex(data) << std::endl;
+																	return;
+																}
 															}
 														}
 													}
@@ -589,16 +600,27 @@ int main(int argc, const char** argv)
 				uint16_t local_port;
 				std::string local_addr_str;
 
-				sr.str(12, acctId);
-				if (!is_u27_or_below(salt))
+				if (!is_u10_or_below(salt)) // >= U11
 				{
-					sr.u64_le(timestamp);
+					sr.str(12, acctId);
+					if (!is_u27_or_below(salt)) // >= U28
+					{
+						sr.u64_le(timestamp);
+					}
+					else if (is_u11_or_below(salt)) // = U11
+					{
+						sr.skip(64); // NatHash
+					}
+					sr.u32_be(local_ip);
+					sr.u16_le(local_port);
+					if (!is_u15_or_below(salt))
+					{
+						ser_str(sr, salt, local_addr_str);
+					}
 				}
-				sr.u32_be(local_ip);
-				sr.u16_le(local_port);
-				if (!is_u15_or_below(salt))
+				else
 				{
-					ser_str(sr, salt, local_addr_str);
+					// ',' acctId ',' NatHash
 				}
 
 #if ENABLE_SHADOW_REALM
@@ -624,7 +646,7 @@ int main(int argc, const char** argv)
 				reflexive_port ^= 0xAAAA;
 
 				StringWriter sw;
-				if (!is_u12_or_below(salt))
+				if (!is_u10_or_below(salt)) // >= U11
 				{
 					{ uint8_t b = 0x64 /* 25 << 2 */; sw.u8(b); }
 					if (is_u15_14_or_below(salt))
@@ -676,9 +698,13 @@ int main(int argc, const char** argv)
 				uint32_t local_ip;
 				uint16_t local_port;
 
-				if (!is_u12_or_below(salt))
+				if (!is_u10_or_below(salt)) // >= U11
 				{
 					sr.str(12, acctId);
+					if (is_u11_or_below(salt))
+					{
+						sr.skip(64); // NatHash
+					}
 					sr.u32_be(local_ip);
 					sr.u16_le(local_port);
 					local_ip ^= 0xAAAAAAAA;
@@ -688,7 +714,7 @@ int main(int argc, const char** argv)
 						sr.skip(2);
 					}
 				}
-				else
+				else // < U11
 				{
 					sr.skip(1); // ','
 					std::string acctId_hex;
@@ -734,10 +760,10 @@ int main(int argc, const char** argv)
 					data->reflexive_port_client = reflexive_port;
 					data->local_port_client = local_port;
 					std::string presence;
-					if (!is_u12_or_below(salt))
+					if (!is_u10_or_below(salt)) // >= U11
 					{
 						sr.u8(data->status);
-						if (!is_u15_or_below(salt))
+						if (!is_u15_or_below(salt)) // >= U15.14
 						{
 							uint8_t num_proxy_connections = 0;
 							sr.u8(num_proxy_connections);
@@ -785,7 +811,7 @@ int main(int argc, const char** argv)
 				data->last_nat_bind = time::unixSeconds();
 
 				StringWriter sw;
-				if (!is_u12_or_below(salt))
+				if (!is_u10_or_below(salt)) // >= U11
 				{
 					{ uint8_t b = 0x60 /* 24 << 2 */; sw.u8(b); }
 					if (!is_u15_or_below(salt))
@@ -796,8 +822,11 @@ int main(int argc, const char** argv)
 							{ uint8_t b = (packet_id == 0x42 ? 1 : 0); sw.u8(b); }
 						}
 					}
-					reflexive_ip ^= 0xAAAAAAAA;
-					reflexive_port ^= 0xAAAA;
+					if (!is_u11_or_below(salt))
+					{
+						reflexive_ip ^= 0xAAAAAAAA;
+						reflexive_port ^= 0xAAAA;
+					}
 					sw.u32_be(reflexive_ip);
 					sw.u16_le(reflexive_port);
 				}
@@ -815,9 +844,13 @@ int main(int argc, const char** argv)
 		case 0x55: // Logout
 			{
 				std::string acctId;
-				if (!is_u12_or_below(salt))
+				if (!is_u10_or_below(salt)) // >= U11
 				{
 					sr.str(12, acctId);
+					if (is_u11_or_below(salt))
+					{
+						// NatHash
+					}
 				}
 				else
 				{
@@ -834,10 +867,14 @@ int main(int argc, const char** argv)
 
 		case 0x70: // Fast presence query
 		case 0x50: // Rich presence query
-			if (!is_u12_or_below(salt))
+			if (!is_u10_or_below(salt)) // >= U11
 			{
 				std::string acctId;
 				sr.str(12, acctId);
+				if (is_u11_or_below(salt))
+				{
+					sr.skip(64); // NatHash
+				}
 				uint8_t task_id;
 				sr.u8(task_id);
 				uint8_t num_queries = 0;
@@ -901,7 +938,7 @@ int main(int argc, const char** argv)
 		case 0x52: // Query client addresses
 		case 0x72: // Query server addresses
 			//std::cout << addr.toString() << " - Request resolve pending punchthroughs" << std::endl;
-			if (!is_u12_or_below(salt))
+			if (!is_u10_or_below(salt)) // >= U11
 			{
 #if ENABLE_SHADOW_REALM
 				std::string acctId;
@@ -916,11 +953,16 @@ int main(int argc, const char** argv)
 #else
 				sr.skip(12); // acctId
 #endif
+				if (is_u11_or_below(salt))
+				{
+					sr.skip(64); // NatHash
+				}
 				uint8_t task_id;
 				sr.u8(task_id);
-				sr.skip(1);
+				sr.skip(1); // num queries?
 				std::string query;
 				sr.str(12, query);
+				//std::cout << addr.toString() << " - Resolving " << string::bin2hexLower(query) << std::endl;
 				if (auto e = account_map.find(query); e != account_map.end())
 				{
 					StringWriter sw;
@@ -1035,9 +1077,13 @@ int main(int argc, const char** argv)
 				uint8_t task_id;
 				std::string target;
 
-				if (!is_u12_or_below(salt))
+				if (!is_u10_or_below(salt)) // >= U11
 				{
 					sr.str(12, acctId);
+					if (is_u11_or_below(salt))
+					{
+						sr.skip(64); // NatHash
+					}
 					sr.u8(task_id);
 					sr.str(12, target);
 				}
@@ -1075,7 +1121,7 @@ int main(int argc, const char** argv)
 				{
 					SocketAddr to_addr(e->second.reflexive_ip, (packet_id & 0x20) ? e->second.reflexive_port_server : e->second.reflexive_port_client);
 #if MAX_PROXY_CONNECTIONS > 0
-					if (is_u12_or_below(salt))
+					if (is_u10_or_below(salt))
 					{
 						if (auto proxy_port = get_proxy(addr.ip.getV4(), addr.port, to_addr.ip.getV4(), to_addr.port))
 						{
@@ -1086,7 +1132,7 @@ int main(int argc, const char** argv)
 					}
 #endif
 #if !FORCE_PROXY_CONNECTIONS
-					if (is_u12_or_below(salt) && local_ip)
+					if (is_u10_or_below(salt) && local_ip)
 					{
 						send_introduction(s, acctId, target, SocketAddr(local_ip, local_port_client), to_addr, IT_FROM_PEER, task_id, e->second.salt, e->second.is_dtls);
 						send_introduction(s, acctId, target, SocketAddr(local_ip, local_port_server), to_addr, IT_FROM_PEER, task_id, e->second.salt, e->second.is_dtls);
@@ -1100,7 +1146,7 @@ int main(int argc, const char** argv)
 
 #if MAX_PROXY_CONNECTIONS > 0
 		case 0x78: // Proxy request
-			if (!is_u12_or_below(salt))
+			if (!is_u15_or_below(salt)) // >= U15.14
 			{
 				std::string acctId;
 				sr.str(12, acctId);
@@ -1128,7 +1174,7 @@ int main(int argc, const char** argv)
 
 		case 0x76: // Game invite
 		case 0x79: // Relayed game invite
-			if (!is_u12_or_below(salt))
+			if (!is_u10_or_below(salt)) // >= U11 (it is unclear if U11 actually uses this packet because I can't find a way to actually send an invite...)
 			{
 				std::string acctId;
 				sr.str(12, acctId);
@@ -1141,6 +1187,10 @@ int main(int argc, const char** argv)
 					}
 				}
 #endif
+				if (is_u11_or_below(salt))
+				{
+					sr.skip(64); // NatHash
+				}
 				uint8_t bindingServerId = 0;
 				if (!is_u15_14_or_below(salt))
 				{
@@ -1216,7 +1266,7 @@ int main(int argc, const char** argv)
 			break;
 
 		case 0x6a: // Send social change (when accepting a friend request or removing a friend in U39 and below; done via IRC nowadays)
-			if (!is_u12_or_below(salt))
+			if (!is_u11_or_below(salt))
 			{
 				std::string acctId; sr.str(12, acctId);
 				uint8_t type; sr.u8(type); // 29 = accept friend request, 30 = remove friend
@@ -1234,20 +1284,33 @@ int main(int argc, const char** argv)
 			}
 			else
 			{
-				// Not used in U8 afaict
+				// Not used in U11 or below afaict
 				std::cout << addr.toString() << " - Unknown packet with id " << (int)packet_id << ": " << string::bin2hex(data) << std::endl;
 			}
 			break;
 
 		case 0x73: // Request friend refresh (when sending a friend request in U39 and below; done via IRC nowadays)
-			if (!is_u12_or_below(salt))
+			if (!is_u10_or_below(salt)) // >= U11
 			{
-				std::string acctId; sr.str(12, acctId);
-				uint8_t unk; sr.u8(unk); // always 0x09 ?
-				uint8_t num_targets = 0; sr.u8(num_targets);
+				std::string acctId;
+				uint8_t unk = 0x05;
+				uint8_t num_targets = 1;
+
+				sr.str(12, acctId);
+				if (is_u11_or_below(salt))
+				{
+					sr.skip(64); // NatHash
+				}
+				else
+				{
+					sr.u8(unk); // always 0x09 ?
+					sr.u8(num_targets);
+				}
+
 				while (num_targets--)
 				{
 					std::string target; sr.str(12, target);
+					// In U11, the target account id seems to be followed by 0x05 instead of 0x09
 					if (auto e = account_map.find(target); e != account_map.end())
 					{
 						e->second.sendFriendRefresh(s, unk);
@@ -1257,7 +1320,7 @@ int main(int argc, const char** argv)
 			}
 			else
 			{
-				// Not used in U8 afaict
+				// Not used in < U11 afaict
 				std::cout << addr.toString() << " - Unknown packet with id " << (int)packet_id << ": " << string::bin2hex(data) << std::endl;
 			}
 			break;
