@@ -69,6 +69,7 @@ static void udp_send(Socket& s, const SocketAddr& addr, const std::string& data,
 static bool is_u12_or_below(const std::string_view& salt)
 {
 	return salt == "6f7fd17e0eb641ab7"
+		|| salt == "6f7fd17e0eb641ab6"
 		|| salt == "3bd61b742870d0bb3"
 		;
 }
@@ -537,14 +538,18 @@ int main(int argc, const char** argv)
 												sr.u32_le(chksum_hi);
 												uint64_t chksum64 = (static_cast<uint64_t>(chksum_hi) << 32) | chksum;
 												//std::cout << "chksum64 = " << std::hex << chksum64 << std::dec << std::endl;
-												salt = "6f7fd17e0eb641ab7"; // ~ U10
+												salt = "6f7fd17e0eb641ab7"; // ~ U10.8
 												if (md5_checksum(data.data() + sr.getPosition(), data.size() - sr.getPosition(), salt) != chksum64)
 												{
-													salt = "3bd61b742870d0bb3"; // ~ U8
+													salt = "6f7fd17e0eb641ab6"; // ~ U10.3
 													if (md5_checksum(data.data() + sr.getPosition(), data.size() - sr.getPosition(), salt) != chksum64)
 													{
-														std::cout << addr.toString() << " - Checksum mismatch: " << string::bin2hex(data) << std::endl;
-														return;
+														salt = "3bd61b742870d0bb3"; // ~ U8
+														if (md5_checksum(data.data() + sr.getPosition(), data.size() - sr.getPosition(), salt) != chksum64)
+														{
+															std::cout << addr.toString() << " - Checksum mismatch: " << string::bin2hex(data) << std::endl;
+															return;
+														}
 													}
 												}
 											}
@@ -794,7 +799,7 @@ int main(int argc, const char** argv)
 				else
 				{
 					{ uint8_t b = 37 << 2; sw.u8(b); }
-					// U8 does not need anything in the response, but U10 needs this:
+					// U8 does not need anything in the response, but U10.8 needs this:
 					std::string tmp = addr.toString();
 					ser_str(sw, salt, tmp);
 				}
