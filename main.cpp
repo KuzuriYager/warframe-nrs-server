@@ -233,6 +233,11 @@ struct AccountData
 
 	time_t last_nat_bind;
 
+	bool isActive() const noexcept
+	{
+		return time::unixSecondsSince(last_nat_bind) <= 120;
+	}
+
 	void sendGameInvite(Socket& s, const std::string& inviter_acctId, const std::string& invitee_acctId, const std::string& session_info, const std::string& inviter_name, uint8_t bindingServerId = 0, uint8_t presence_state = 3)
 	{
 		StringWriter sw;
@@ -883,7 +888,7 @@ int main(int argc, const char** argv)
 					sw.str(12, query);
 					if (auto e = account_map.find(query); e != account_map.end())
 					{
-						if (time::unixSecondsSince(e->second.last_nat_bind) <= 120)
+						if (e->second.isActive())
 						{
 #if ENABLE_SHADOW_REALM
 							if (in_shadow_realm)
