@@ -891,21 +891,22 @@ int main(int argc, const char** argv)
 						if (e->second.isActive())
 						{
 #if ENABLE_SHADOW_REALM
-							if (in_shadow_realm)
-							{
-								goto _write_empty_presence;
-							}
+							if (!in_shadow_realm)
 #endif
-							sw.u8(e->second.status);
-							if (packet_id == 0x50)
 							{
-								ser_str(sw, salt, e->second.presence);
+								sw.u8(e->second.status);
+								if (packet_id == 0x50)
+								{
+									ser_str(sw, salt, e->second.presence);
+								}
+								continue;
 							}
-							continue;
 						}
-						account_map.erase(e);
+						else
+						{
+							account_map.erase(e);
+						}
 					}
-				_write_empty_presence:
 					{ uint8_t b = 0; sw.u8(b); }
 					if (packet_id == 0x50)
 					{
@@ -953,44 +954,51 @@ int main(int argc, const char** argv)
 				//std::cout << addr.toString() << " - Resolving " << string::bin2hexLower(query) << std::endl;
 				if (auto e = account_map.find(query); e != account_map.end())
 				{
-					StringWriter sw;
-					{ uint8_t b = 0x68; sw.u8(b); }
-					sw.u8(task_id);
-					{ uint8_t b = 1; sw.u8(b); } // num results
-					sw.str(12, query); // result 0 account id
-					if (!is_u32_or_below(salt))
+					if (e->second.isActive())
 					{
-						{ uint8_t b = 0x81; sw.u8(b); } // result 0 bitflags
+						StringWriter sw;
+						{ uint8_t b = 0x68; sw.u8(b); }
+						sw.u8(task_id);
+						{ uint8_t b = 1; sw.u8(b); } // num results
+						sw.str(12, query); // result 0 account id
+						if (!is_u32_or_below(salt))
+						{
+							{ uint8_t b = 0x81; sw.u8(b); } // result 0 bitflags
+						}
+						else
+						{
+							{ uint8_t b = 4; sw.u8(b); } // result 0 bitflags
+						}
+						{
+#if FORCE_PROXY_CONNECTIONS
+							uint32_t masked_ip = SOUP_IPV4(10, 0, 0, 0) ^ 0xAAAAAAAA;
+#else
+							uint32_t masked_ip = e->second.reflexive_ip ^ 0xAAAAAAAA;
+#endif
+							sw.u32_be(masked_ip);
+						}
+						{
+							uint16_t masked_port = ((packet_id & 0x20) ? e->second.reflexive_port_server : e->second.reflexive_port_client) ^ 0xAAAA;
+							sw.u16_le(masked_port);
+						}
+						{
+#if FORCE_PROXY_CONNECTIONS
+							uint32_t masked_ip = SOUP_IPV4(10, 0, 0, 0) ^ 0xAAAAAAAA;
+#else
+							uint32_t masked_ip = e->second.local_ip ^ 0xAAAAAAAA;
+#endif
+							sw.u32_be(masked_ip);
+						}
+						{
+							uint16_t masked_port = ((packet_id & 0x20) ? e->second.local_port_server : e->second.local_port_client) ^ 0xAAAA;
+							sw.u16_le(masked_port);
+						}
+						udp_send(s, addr, packData(sw.data, salt), is_dtls);
 					}
 					else
 					{
-						{ uint8_t b = 4; sw.u8(b); } // result 0 bitflags
+						account_map.erase(e);
 					}
-					{
-#if FORCE_PROXY_CONNECTIONS
-						uint32_t masked_ip = SOUP_IPV4(10, 0, 0, 0) ^ 0xAAAAAAAA;
-#else
-						uint32_t masked_ip = e->second.reflexive_ip ^ 0xAAAAAAAA;
-#endif
-						sw.u32_be(masked_ip);
-					}
-					{
-						uint16_t masked_port = ((packet_id & 0x20) ? e->second.reflexive_port_server : e->second.reflexive_port_client) ^ 0xAAAA;
-						sw.u16_le(masked_port);
-					}
-					{
-#if FORCE_PROXY_CONNECTIONS
-						uint32_t masked_ip = SOUP_IPV4(10, 0, 0, 0) ^ 0xAAAAAAAA;
-#else
-						uint32_t masked_ip = e->second.local_ip ^ 0xAAAAAAAA;
-#endif
-						sw.u32_be(masked_ip);
-					}
-					{
-						uint16_t masked_port = ((packet_id & 0x20) ? e->second.local_port_server : e->second.local_port_client) ^ 0xAAAA;
-						sw.u16_le(masked_port);
-					}
-					udp_send(s, addr, packData(sw.data, salt), is_dtls);
 				}
 			}
 			else
@@ -1011,44 +1019,46 @@ int main(int argc, const char** argv)
 					res.push_back(',');
 					if (auto e = account_map.find(target); e != account_map.end())
 					{
+						if (e->second.isActive())
+						{
 #if MAX_PROXY_CONNECTIONS > 0 && PROXYING_FOR_LEGACY
-						if (auto proxy_port = get_proxy(addr.ip.getV4(), false, Endianness::toNetwork(e->second.reflexive_ip), (packet_id & 0x20)))
-						{
-							res.append(IpAddr(proxy_ip).toString());
-							res.push_back(',');
-							res.append(std::to_string(Endianness::toNative(proxy_port)));
-							goto _finish_query;
-						}
-						if (auto proxy_port = get_proxy(Endianness::toNetwork(e->second.reflexive_ip), (packet_id & 0x20), addr.ip.getV4(), false))
-						{
-							res.append(IpAddr(proxy_ip).toString());
-							res.push_back(',');
-							res.append(std::to_string(Endianness::toNative(proxy_port)));
-							goto _finish_query;
-						}
+							if (auto proxy_port = get_proxy(addr.ip.getV4(), false, Endianness::toNetwork(e->second.reflexive_ip), (packet_id & 0x20)))
+							{
+								res.append(IpAddr(proxy_ip).toString());
+								res.push_back(',');
+								res.append(std::to_string(Endianness::toNative(proxy_port)));
+							}
+							else if (auto proxy_port = get_proxy(Endianness::toNetwork(e->second.reflexive_ip), (packet_id & 0x20), addr.ip.getV4(), false))
+							{
+								res.append(IpAddr(proxy_ip).toString());
+								res.push_back(',');
+								res.append(std::to_string(Endianness::toNative(proxy_port)));
+							}
+							else
 #endif
+							{
 #if FORCE_PROXY_CONNECTIONS
-						res.append("10.0.0.0");
+								res.append("10.0.0.0");
 #else
-						res.append(IpAddr(e->second.reflexive_ip).toString());
+								res.append(IpAddr(e->second.reflexive_ip).toString());
 #endif
-						res.push_back(',');
-						res.append(std::to_string((packet_id & 0x20) ? e->second.reflexive_port_server : e->second.reflexive_port_client));
-						res.append(",priv,");
+								res.push_back(',');
+								res.append(std::to_string((packet_id & 0x20) ? e->second.reflexive_port_server : e->second.reflexive_port_client));
+								res.append(",priv,");
 #if FORCE_PROXY_CONNECTIONS
-						res.append("10.0.0.0");
+								res.append("10.0.0.0");
 #else
-						res.append(IpAddr(e->second.local_ip).toString());
+								res.append(IpAddr(e->second.local_ip).toString());
 #endif
-						res.push_back(',');
-						res.append(std::to_string((packet_id & 0x20) ? e->second.local_port_server : e->second.local_port_client));
-					_finish_query:
-						res.push_back(',');
+								res.push_back(',');
+								res.append(std::to_string((packet_id & 0x20) ? e->second.local_port_server : e->second.local_port_client));
+							}
+							res.push_back(',');
+							continue;
+						}
+						account_map.erase(e);
 					}
-					else
-					{
-						res.append(",0,0,");
-					}
+					res.append(",0,0,");
 				}
 				if (!res.empty())
 				{
@@ -1115,36 +1125,43 @@ int main(int argc, const char** argv)
 
 				if (auto e = account_map.find(target); e != account_map.end())
 				{
-					SocketAddr to_addr(e->second.reflexive_ip, to_server ? e->second.reflexive_port_server : e->second.reflexive_port_client);
+					if (e->second.isActive())
+					{
+						SocketAddr to_addr(e->second.reflexive_ip, to_server ? e->second.reflexive_port_server : e->second.reflexive_port_client);
 #if FORCE_PROXY_CONNECTIONS
-					// For emulation's sake
-					send_introduction(s, acctId, target, SocketAddr(SOUP_IPV4_NWE(10, 0, 0, 0), addr.port), to_addr, IT_FROM_PEER, task_id, e->second.salt, e->second.is_dtls);
+						// For emulation's sake
+						send_introduction(s, acctId, target, SocketAddr(SOUP_IPV4_NWE(10, 0, 0, 0), addr.port), to_addr, IT_FROM_PEER, task_id, e->second.salt, e->second.is_dtls);
 #else
-					if (local_ip)
-					{
-						// This might not be entirely faithful but sometimes the correct LAN address is not detected, so also trying this the other way around should help.
-						send_introduction(s, acctId, target, SocketAddr(local_ip, local_port), to_addr, IT_FROM_PEER, task_id, e->second.salt, e->second.is_dtls);
-					}
-					send_introduction(s, acctId, target, addr, to_addr, IT_FROM_PEER, task_id, e->second.salt, e->second.is_dtls);
+						if (local_ip)
+						{
+							// This might not be entirely faithful but sometimes the correct LAN address is not detected, so also trying this the other way around should help.
+							send_introduction(s, acctId, target, SocketAddr(local_ip, local_port), to_addr, IT_FROM_PEER, task_id, e->second.salt, e->second.is_dtls);
+						}
+						send_introduction(s, acctId, target, addr, to_addr, IT_FROM_PEER, task_id, e->second.salt, e->second.is_dtls);
 #endif
-					std::cout << addr.toString() << "#" << string::bin2hexLower(acctId) << " - Introduced to " << to_addr.toString() << "#" << string::bin2hexLower(target);
+						std::cout << addr.toString() << "#" << string::bin2hexLower(acctId) << " - Introduced to " << to_addr.toString() << "#" << string::bin2hexLower(target);
 #if MAX_PROXY_CONNECTIONS > 0 && PROXYING_FOR_LEGACY
-					if (is_u15_or_below(salt)) // < U15.14
-					{
-						// Check if other party already reserved a proxy port for us
-						network_u16_t proxy_port = get_proxy(to_addr.ip.getV4(), to_server, addr.ip.getV4(), from_server);
-						if (proxy_port == 0)
+						if (is_u15_or_below(salt)) // < U15.14
 						{
-							proxy_port = setup_proxying(addr.ip.getV4(), addr.port, from_server, to_addr.ip.getV4(), to_addr.port, to_server);
+							// Check if other party already reserved a proxy port for us
+							network_u16_t proxy_port = get_proxy(to_addr.ip.getV4(), to_server, addr.ip.getV4(), from_server);
+							if (proxy_port == 0)
+							{
+								proxy_port = setup_proxying(addr.ip.getV4(), addr.port, from_server, to_addr.ip.getV4(), to_addr.port, to_server);
+							}
+							if (proxy_port != 0)
+							{
+								std::cout << " with proxy port " << Endianness::toNative(proxy_port) << " in reserve";
+								send_introduction(s, acctId, target, SocketAddr(proxy_ip, proxy_port), to_addr, IT_FROM_PEER, task_id, e->second.salt, e->second.is_dtls);
+							}
 						}
-						if (proxy_port != 0)
-						{
-							std::cout << " with proxy port " << Endianness::toNative(proxy_port) << " in reserve";
-							send_introduction(s, acctId, target, SocketAddr(proxy_ip, proxy_port), to_addr, IT_FROM_PEER, task_id, e->second.salt, e->second.is_dtls);
-						}
-					}
 #endif
-					std::cout << std::endl;
+						std::cout << std::endl;
+					}
+					else
+					{
+						account_map.erase(e);
+					}
 				}
 			}
 			break;
@@ -1161,12 +1178,19 @@ int main(int argc, const char** argv)
 				sr.str(12, target);
 				if (auto e = account_map.find(target); e != account_map.end())
 				{
-					SocketAddr to_addr(e->second.reflexive_ip, e->second.reflexive_port_server);
-					if (auto proxy_port = setup_proxying(addr.ip.getV4(), addr.port, false, to_addr.ip.getV4(), to_addr.port, true))
+					if (e->second.isActive())
 					{
-						send_introduction(s, target, acctId, SocketAddr(proxy_ip, proxy_port), addr, IT_TO_PROXY, task_id, salt, is_dtls);
-						send_introduction(s, acctId, target, SocketAddr(proxy_ip, proxy_port), to_addr, IT_VIA_PROXY, task_id, e->second.salt, e->second.is_dtls);
-						std::cout << addr.toString() << "#" << string::bin2hexLower(acctId) << " - Obtained proxy port " << Endianness::toNative(proxy_port) << " to connect to " << string::bin2hexLower(target) << std::endl;
+						SocketAddr to_addr(e->second.reflexive_ip, e->second.reflexive_port_server);
+						if (auto proxy_port = setup_proxying(addr.ip.getV4(), addr.port, false, to_addr.ip.getV4(), to_addr.port, true))
+						{
+							send_introduction(s, target, acctId, SocketAddr(proxy_ip, proxy_port), addr, IT_TO_PROXY, task_id, salt, is_dtls);
+							send_introduction(s, acctId, target, SocketAddr(proxy_ip, proxy_port), to_addr, IT_VIA_PROXY, task_id, e->second.salt, e->second.is_dtls);
+							std::cout << addr.toString() << "#" << string::bin2hexLower(acctId) << " - Obtained proxy port " << Endianness::toNative(proxy_port) << " to connect to " << string::bin2hexLower(target) << std::endl;
+						}
+					}
+					else
+					{
+						account_map.erase(e);
 					}
 				}
 			}
@@ -1215,9 +1239,14 @@ int main(int argc, const char** argv)
 				//std::cout << addr.toString() << " - " << inviter_name << " (" << string::bin2hex(acctId) << ") sending invite to " << string::bin2hex(target) << std::endl;
 				if (auto e = account_map.find(target); e != account_map.end())
 				{
-					e->second.sendGameInvite(s, acctId, target, session_info, inviter_name, bindingServerId, presence_state);
+					if (e->second.isActive())
+					{
+						e->second.sendGameInvite(s, acctId, target, session_info, inviter_name, bindingServerId, presence_state);
+						break;
+					}
+					account_map.erase(e);
 				}
-				else if (!is_u15_14_or_below(salt)) // Invite responses were introduced some time after U15.14
+				if (!is_u15_14_or_below(salt)) // Invite responses were introduced some time after U15.14
 				{
 					// Send game invite response with status 0 for offline
 					StringWriter sw;
@@ -1256,12 +1285,19 @@ int main(int argc, const char** argv)
 				sr.u8(status);
 				if (auto e = account_map.find(target); e != account_map.end())
 				{
-					StringWriter sw;
-					{ uint8_t b = 0xa4; sw.u8(b); }
-					sw.str(12, target);
-					sw.str(12, acctId);
-					sw.u8(status);
-					udp_send(s, SocketAddr(e->second.reflexive_ip, e->second.reflexive_port_server), packData(sw.data, e->second.salt), e->second.is_dtls);
+					if (e->second.isActive())
+					{
+						StringWriter sw;
+						{ uint8_t b = 0xa4; sw.u8(b); }
+						sw.str(12, target);
+						sw.str(12, acctId);
+						sw.u8(status);
+						udp_send(s, SocketAddr(e->second.reflexive_ip, e->second.reflexive_port_server), packData(sw.data, e->second.salt), e->second.is_dtls);
+					}
+					else
+					{
+						account_map.erase(e);
+					}
 				}
 			}
 			else
@@ -1282,8 +1318,15 @@ int main(int argc, const char** argv)
 					std::string json; ser_str(sr, salt, json);
 					if (auto e = account_map.find(target); e != account_map.end())
 					{
-						e->second.sendSocialChange(s, type, json);
-						std::cout << addr.toString() << "#" << string::bin2hexLower(acctId) << " - Sent social change " << (int)type << " " << json << " to " << SocketAddr(e->second.reflexive_ip, e->second.reflexive_port_client).toString() << "#" << string::bin2hexLower(target) << std::endl;
+						if (e->second.isActive())
+						{
+							e->second.sendSocialChange(s, type, json);
+							std::cout << addr.toString() << "#" << string::bin2hexLower(acctId) << " - Sent social change " << (int)type << " " << json << " to " << SocketAddr(e->second.reflexive_ip, e->second.reflexive_port_client).toString() << "#" << string::bin2hexLower(target) << std::endl;
+						}
+						else
+						{
+							account_map.erase(e);
+						}
 					}
 				}
 			}
@@ -1318,8 +1361,15 @@ int main(int argc, const char** argv)
 					// In U11, the target account id seems to be followed by 0x05 instead of 0x09
 					if (auto e = account_map.find(target); e != account_map.end())
 					{
-						e->second.sendFriendRefresh(s, unk);
-						std::cout << addr.toString() << "#" << string::bin2hexLower(acctId) << " - Sent friend request refresh " << (int)unk << " to " << SocketAddr(e->second.reflexive_ip, e->second.reflexive_port_client).toString() << "#" << string::bin2hexLower(target) << std::endl;
+						if (e->second.isActive())
+						{
+							e->second.sendFriendRefresh(s, unk);
+							std::cout << addr.toString() << "#" << string::bin2hexLower(acctId) << " - Sent friend request refresh " << (int)unk << " to " << SocketAddr(e->second.reflexive_ip, e->second.reflexive_port_client).toString() << "#" << string::bin2hexLower(target) << std::endl;
+						}
+						else
+						{
+							account_map.erase(e);
+						}
 					}
 				}
 			}
@@ -1339,19 +1389,26 @@ int main(int argc, const char** argv)
 				{
 					if (auto e = account_map.find(string::hex2bin(arr[2])); e != account_map.end())
 					{
-						if (arr[0] == "addPendingFriend")
+						if (e->second.isActive())
 						{
-							e->second.sendFriendRefresh(s, 9);
+							if (arr[0] == "addPendingFriend")
+							{
+								e->second.sendFriendRefresh(s, 9);
+							}
+							else if (arr[0] == "addFriend")
+							{
+								//e->second.sendSocialChange(s, 29, "{\"id\":\"" + arr[1] + "\",\"avatarImage\":\"\",\"level\":0}");
+								//e->second.sendSocialChange(s, 29, "{\"id\":\"" + arr[1] + "\"}");
+								e->second.sendFriendRefresh(s, 9); // Unfaithful, but this way the avatarImage and level don't get reset by this notification.
+							}
+							else if (arr[0] == "removeFriend")
+							{
+								e->second.sendSocialChange(s, 30, "{\"id\":\"" + arr[1] + "\"}");
+							}
 						}
-						else if (arr[0] == "addFriend")
+						else
 						{
-							//e->second.sendSocialChange(s, 29, "{\"id\":\"" + arr[1] + "\",\"avatarImage\":\"\",\"level\":0}");
-							//e->second.sendSocialChange(s, 29, "{\"id\":\"" + arr[1] + "\"}");
-							e->second.sendFriendRefresh(s, 9); // Unfaithful, but this way the avatarImage and level don't get reset by this notification.
-						}
-						else if (arr[0] == "removeFriend")
-						{
-							e->second.sendSocialChange(s, 30, "{\"id\":\"" + arr[1] + "\"}");
+							account_map.erase(e);
 						}
 					}
 				}
