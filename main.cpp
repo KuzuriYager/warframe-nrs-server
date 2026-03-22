@@ -1019,10 +1019,10 @@ int main(int argc, const char** argv)
 				for (const auto& target_hex : arr)
 				{
 					const auto target = string::hex2bin(target_hex);
+					res.append(target_hex);
+					res.push_back(',');
 					if (auto e = account_map.find(target); e != account_map.end())
 					{
-						res.append(target_hex);
-						res.push_back(',');
 #if MAX_PROXY_CONNECTIONS > 0 && PROXYING_FOR_LEGACY
 						if (e->second.queried_by.find(acctId) != e->second.queried_by.end())
 						{
@@ -1050,12 +1050,12 @@ int main(int argc, const char** argv)
 					_finish_query:
 						res.push_back(',');
 					}
+					else
+					{
+						res.append(",0,0,");
+					}
 				}
-				if (res.empty())
-				{
-					// Seemingly no valid way to respond... just let client time out?
-				}
-				else
+				if (!res.empty())
 				{
 					res.pop_back();
 					StringWriter sw;
