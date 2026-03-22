@@ -5,8 +5,9 @@
 #define BANISH_U41_1_TO_SHADOW_REALM DEPLOYMENT
 
 #define IS_LAN_DEPLOYMENT !DEPLOYMENT
+
 #define MAX_PROXY_CONNECTIONS 100
-#define PROXYING_FOR_LEGACY false
+#define PROXYING_FOR_LEGACY true
 #define FORCE_PROXY_CONNECTIONS false
 
 #include <crc32.hpp>
@@ -232,10 +233,6 @@ struct AccountData
 
 	time_t last_nat_bind;
 
-#if MAX_PROXY_CONNECTIONS > 0 && PROXYING_FOR_LEGACY
-	std::unordered_set<std::string> queried_by; // tracking U8 queries to swoop in with potential proxying
-#endif
-
 	void sendGameInvite(Socket& s, const std::string& inviter_acctId, const std::string& invitee_acctId, const std::string& session_info, const std::string& inviter_name, uint8_t bindingServerId = 0, uint8_t presence_state = 3)
 	{
 		StringWriter sw;
@@ -337,11 +334,13 @@ static void send_introduction(Socket& s, const std::string& from_acctId, const s
 #if MAX_PROXY_CONNECTIONS > 0
 struct Proxy : public ServerServiceUdp
 {
-	network_u32_t client_ip;
-	network_u32_t server_ip;
-	network_u16_t client_port;
-	network_u16_t server_port;
+	network_u32_t left_ip;
+	network_u32_t right_ip;
+	network_u16_t left_port;
+	network_u16_t right_port;
 	network_u16_t port;
+	bool left_is_server;
+	bool right_is_server;
 	time_t last_traffic = 0;
 
 	Proxy()
@@ -356,17 +355,17 @@ struct Proxy : public ServerServiceUdp
 
 	void callback(Socket& s, SocketAddr&& addr, std::string&& data)
 	{
-		if (addr.ip.getV4() == client_ip /*&& addr.port == client_port*/)
+		if (addr.ip.getV4() == left_ip /*&& addr.port == left_port*/)
 		{
-			client_port = addr.port;
+			left_port = addr.port;
 			last_traffic = time::unixSeconds();
-			s.udpServerSend(SocketAddr(server_ip, server_port), std::move(data));
+			s.udpServerSend(SocketAddr(right_ip, right_port), std::move(data));
 		}
-		else if (addr.ip.getV4() == server_ip /*&& addr.port == server_port*/)
+		else if (addr.ip.getV4() == right_ip /*&& addr.port == right_port*/)
 		{
-			server_port = addr.port;
+			right_port = addr.port;
 			last_traffic = time::unixSeconds();
-			s.udpServerSend(SocketAddr(client_ip, client_port), std::move(data));
+			s.udpServerSend(SocketAddr(left_ip, left_port), std::move(data));
 		}
 		else
 		{
@@ -377,15 +376,15 @@ struct Proxy : public ServerServiceUdp
 static network_u32_t proxy_ip = 0;
 static Proxy proxies[MAX_PROXY_CONNECTIONS];
 
-static network_u16_t get_proxy(network_u32_t client_ip, network_u16_t client_port, network_u32_t server_ip, network_u16_t server_port)
+static network_u16_t get_proxy(network_u32_t left_ip, bool left_is_server, network_u32_t right_ip, bool right_is_server)
 {
-	if (client_ip == server_ip)
+	if (left_ip == right_ip)
 	{
 		return 0;
 	}
 	for (auto& proxy : proxies)
 	{
-		if (proxy.client_ip == client_ip && proxy.server_ip == server_ip /*&& proxy.client_port == client_port && proxy.server_port == server_port*/)
+		if (proxy.left_ip == left_ip && proxy.right_ip == right_ip && proxy.left_is_server == left_is_server && proxy.right_is_server == right_is_server && time::unixSecondsSince(proxy.last_traffic) <= 60)
 		{
 			proxy.last_traffic = time::unixSeconds();
 			return proxy.port;
@@ -394,31 +393,33 @@ static network_u16_t get_proxy(network_u32_t client_ip, network_u16_t client_por
 	return 0;
 }
 
-static network_u16_t setup_proxying(network_u32_t client_ip, network_u16_t client_port, network_u32_t server_ip, network_u16_t server_port)
+static network_u16_t setup_proxying(network_u32_t left_ip, network_u16_t left_port, bool left_is_server, network_u32_t right_ip, network_u16_t right_port, bool right_is_server)
 {
-	if (client_ip == server_ip)
+	if (left_ip == right_ip)
 	{
 		return 0;
 	}
 	Proxy* free_proxy = nullptr;
 	for (auto& proxy : proxies)
 	{
-		if (proxy.client_ip == client_ip && proxy.server_ip == server_ip /*&& proxy.client_port == client_port && proxy.server_port == server_port*/)
+		if (proxy.left_ip == left_ip && proxy.right_ip == right_ip && proxy.left_is_server == left_is_server && proxy.right_is_server == right_is_server)
 		{
 			proxy.last_traffic = time::unixSeconds();
 			return proxy.port;
 		}
-		if (free_proxy == nullptr && time::unixSecondsSince(proxy.last_traffic) > 30)
+		if (free_proxy == nullptr && time::unixSecondsSince(proxy.last_traffic) > 60)
 		{
 			free_proxy = &proxy;
 		}
 	}
 	if (free_proxy)
 	{
-		free_proxy->client_ip = client_ip;
-		free_proxy->server_ip = server_ip;
-		free_proxy->client_port = client_port;
-		free_proxy->server_port = server_port;
+		free_proxy->left_ip = left_ip;
+		free_proxy->right_ip = right_ip;
+		free_proxy->left_port = left_port;
+		free_proxy->right_port = right_port;
+		free_proxy->left_is_server = left_is_server;
+		free_proxy->right_is_server = right_is_server;
 		free_proxy->last_traffic = time::unixSeconds();
 		return free_proxy->port;
 	}
@@ -739,24 +740,12 @@ int main(int argc, const char** argv)
 				{
 					data = &account_map.emplace(acctId, AccountData{}).first->second;
 				}
-#if MAX_PROXY_CONNECTIONS > 0 && PROXYING_FOR_LEGACY
-				if (data->reflexive_ip != reflexive_ip || data->local_ip != local_ip)
-				{
-					data->queried_by.clear();
-				}
-#endif
 				data->reflexive_ip = reflexive_ip;
 				data->local_ip = local_ip;
 				data->salt = salt;
 				data->is_dtls = is_dtls;
 				if (packet_id == 0x42)
 				{
-#if MAX_PROXY_CONNECTIONS > 0 && PROXYING_FOR_LEGACY
-					if (data->reflexive_port_client != reflexive_port || data->local_port_client != local_port)
-					{
-						data->queried_by.clear();
-					}
-#endif
 					data->reflexive_port_client = reflexive_port;
 					data->local_port_client = local_port;
 					std::string presence;
@@ -799,12 +788,6 @@ int main(int argc, const char** argv)
 				{
 					//std::cout << addr.toString() << "#" << string::bin2hexLower(acctId) << " - Server Local Addr: " << IpAddr((native_u32_t)local_ip).toString() << ":" << local_port << std::endl;
 
-#if MAX_PROXY_CONNECTIONS > 0 && PROXYING_FOR_LEGACY
-					if (data->reflexive_port_server != reflexive_port || data->local_port_server != local_port)
-					{
-						data->queried_by.clear();
-					}
-#endif
 					data->reflexive_port_server = reflexive_port;
 					data->local_port_server = local_port;
 				}
@@ -1024,20 +1007,19 @@ int main(int argc, const char** argv)
 					if (auto e = account_map.find(target); e != account_map.end())
 					{
 #if MAX_PROXY_CONNECTIONS > 0 && PROXYING_FOR_LEGACY
-						if (e->second.queried_by.find(acctId) != e->second.queried_by.end())
+						if (auto proxy_port = get_proxy(addr.ip.getV4(), false, Endianness::toNetwork(e->second.reflexive_ip), (packet_id & 0x20)))
 						{
-							if (auto proxy_port = setup_proxying(addr.ip.getV4(), addr.port, Endianness::toNetwork(e->second.reflexive_ip), Endianness::toNetwork(((packet_id & 0x20) ? e->second.reflexive_port_server : e->second.reflexive_port_client))))
-							{
-								std::cout << addr.toString() << "#" << string::bin2hexLower(acctId) << " - Obtained proxy port " << Endianness::toNative(proxy_port) << " to connect to " << target_hex << std::endl;
-								res.append(IpAddr(proxy_ip).toString());
-								res.push_back(',');
-								res.append(std::to_string(Endianness::toNative(proxy_port)));
-								goto _finish_query;
-							}
+							res.append(IpAddr(proxy_ip).toString());
+							res.push_back(',');
+							res.append(std::to_string(Endianness::toNative(proxy_port)));
+							goto _finish_query;
 						}
-						else
+						if (auto proxy_port = get_proxy(Endianness::toNetwork(e->second.reflexive_ip), (packet_id & 0x20), addr.ip.getV4(), false))
 						{
-							e->second.queried_by.emplace(acctId);
+							res.append(IpAddr(proxy_ip).toString());
+							res.push_back(',');
+							res.append(std::to_string(Endianness::toNative(proxy_port)));
+							goto _finish_query;
 						}
 #endif
 #if FORCE_PROXY_CONNECTIONS
@@ -1111,6 +1093,8 @@ int main(int argc, const char** argv)
 
 				native_u32_t local_ip = 0;
 				native_u16_t local_port;
+				bool from_server = false;
+				const bool to_server = (packet_id & 0x20);
 				if (auto e = account_map.find(acctId); e != account_map.end())
 				{
 #if ENABLE_SHADOW_REALM
@@ -1120,32 +1104,42 @@ int main(int argc, const char** argv)
 					}
 #endif
 					local_ip = e->second.local_ip;
-					local_port = (addr.getPort() == e->second.reflexive_port_server ? e->second.local_port_server : e->second.local_port_client);
+					from_server = (addr.getPort() == e->second.reflexive_port_server);
+					local_port = (from_server ? e->second.local_port_server : e->second.local_port_client);
 				}
 
 				if (auto e = account_map.find(target); e != account_map.end())
 				{
-					SocketAddr to_addr(e->second.reflexive_ip, (packet_id & 0x20) ? e->second.reflexive_port_server : e->second.reflexive_port_client);
-#if MAX_PROXY_CONNECTIONS > 0
-					if (is_u10_or_below(salt))
-					{
-						if (auto proxy_port = get_proxy(addr.ip.getV4(), addr.port, to_addr.ip.getV4(), to_addr.port))
-						{
-							send_introduction(s, acctId, target, SocketAddr(proxy_ip, proxy_port), to_addr, IT_VIA_PROXY, task_id, e->second.salt, e->second.is_dtls);
-							std::cout << addr.toString() << "#" << string::bin2hexLower(acctId) << " - Introduced " << to_addr.toString() << "#" << string::bin2hexLower(target) << " to proxy port " << Endianness::toNative(proxy_port) << std::endl;
-							break;
-						}
-					}
-#endif
-#if !FORCE_PROXY_CONNECTIONS
+					SocketAddr to_addr(e->second.reflexive_ip, to_server ? e->second.reflexive_port_server : e->second.reflexive_port_client);
+#if FORCE_PROXY_CONNECTIONS
+					// For emulation's sake
+					send_introduction(s, acctId, target, SocketAddr(SOUP_IPV4_NWE(10, 0, 0, 0), addr.port), to_addr, IT_FROM_PEER, task_id, e->second.salt, e->second.is_dtls);
+#else
 					if (local_ip)
 					{
 						// This might not be entirely faithful but sometimes the correct LAN address is not detected, so also trying this the other way around should help.
 						send_introduction(s, acctId, target, SocketAddr(local_ip, local_port), to_addr, IT_FROM_PEER, task_id, e->second.salt, e->second.is_dtls);
 					}
 					send_introduction(s, acctId, target, addr, to_addr, IT_FROM_PEER, task_id, e->second.salt, e->second.is_dtls);
-					std::cout << addr.toString() << "#" << string::bin2hexLower(acctId) << " - Introduced to " << to_addr.toString() << "#" << string::bin2hexLower(target) << std::endl;
 #endif
+					std::cout << addr.toString() << "#" << string::bin2hexLower(acctId) << " - Introduced to " << to_addr.toString() << "#" << string::bin2hexLower(target);
+#if MAX_PROXY_CONNECTIONS > 0 && PROXYING_FOR_LEGACY
+					if (is_u15_or_below(salt)) // < U15.14
+					{
+						// Check if other party already reserved a proxy port for us
+						network_u16_t proxy_port = get_proxy(to_addr.ip.getV4(), to_server, addr.ip.getV4(), from_server);
+						if (proxy_port == 0)
+						{
+							proxy_port = setup_proxying(addr.ip.getV4(), addr.port, from_server, to_addr.ip.getV4(), to_addr.port, to_server);
+						}
+						if (proxy_port != 0)
+						{
+							std::cout << " with proxy port " << Endianness::toNative(proxy_port) << " in reserve";
+							send_introduction(s, acctId, target, SocketAddr(proxy_ip, proxy_port), to_addr, IT_FROM_PEER, task_id, e->second.salt, e->second.is_dtls);
+						}
+					}
+#endif
+					std::cout << std::endl;
 				}
 			}
 			break;
@@ -1163,7 +1157,7 @@ int main(int argc, const char** argv)
 				if (auto e = account_map.find(target); e != account_map.end())
 				{
 					SocketAddr to_addr(e->second.reflexive_ip, e->second.reflexive_port_server);
-					if (auto proxy_port = setup_proxying(addr.ip.getV4(), addr.port, to_addr.ip.getV4(), to_addr.port))
+					if (auto proxy_port = setup_proxying(addr.ip.getV4(), addr.port, false, to_addr.ip.getV4(), to_addr.port, true))
 					{
 						send_introduction(s, target, acctId, SocketAddr(proxy_ip, proxy_port), addr, IT_TO_PROXY, task_id, salt, is_dtls);
 						send_introduction(s, acctId, target, SocketAddr(proxy_ip, proxy_port), to_addr, IT_VIA_PROXY, task_id, e->second.salt, e->second.is_dtls);
