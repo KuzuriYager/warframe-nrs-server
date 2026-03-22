@@ -1110,8 +1110,7 @@ int main(int argc, const char** argv)
 				}
 
 				native_u32_t local_ip = 0;
-				native_u16_t local_port_client;
-				native_u16_t local_port_server;
+				native_u16_t local_port;
 				if (auto e = account_map.find(acctId); e != account_map.end())
 				{
 #if ENABLE_SHADOW_REALM
@@ -1121,8 +1120,7 @@ int main(int argc, const char** argv)
 					}
 #endif
 					local_ip = e->second.local_ip;
-					local_port_client = e->second.local_port_client;
-					local_port_server = e->second.local_port_server;
+					local_port = (addr.getPort() == e->second.reflexive_port_server ? e->second.local_port_server : e->second.local_port_client);
 				}
 
 				if (auto e = account_map.find(target); e != account_map.end())
@@ -1140,10 +1138,10 @@ int main(int argc, const char** argv)
 					}
 #endif
 #if !FORCE_PROXY_CONNECTIONS
-					if (is_u10_or_below(salt) && local_ip)
+					if (local_ip)
 					{
-						send_introduction(s, acctId, target, SocketAddr(local_ip, local_port_client), to_addr, IT_FROM_PEER, task_id, e->second.salt, e->second.is_dtls);
-						send_introduction(s, acctId, target, SocketAddr(local_ip, local_port_server), to_addr, IT_FROM_PEER, task_id, e->second.salt, e->second.is_dtls);
+						// This might not be entirely faithful but sometimes the correct LAN address is not detected, so also trying this the other way around should help.
+						send_introduction(s, acctId, target, SocketAddr(local_ip, local_port), to_addr, IT_FROM_PEER, task_id, e->second.salt, e->second.is_dtls);
 					}
 					send_introduction(s, acctId, target, addr, to_addr, IT_FROM_PEER, task_id, e->second.salt, e->second.is_dtls);
 					std::cout << addr.toString() << "#" << string::bin2hexLower(acctId) << " - Introduced to " << to_addr.toString() << "#" << string::bin2hexLower(target) << std::endl;
