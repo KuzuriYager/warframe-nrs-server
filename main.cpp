@@ -10,11 +10,17 @@
 #define PROXYING_FOR_LEGACY true
 #define FORCE_PROXY_CONNECTIONS false
 
+#define ENABLE_HTTP true
+#define HTTP_PORT 4950
+
 #include <crc32.hpp>
 #include <crc32c.hpp>
 /*#if IS_LAN_DEPLOYMENT
 #include <dhcp.hpp>
 #endif*/
+#if ENABLE_HTTP
+#include <JsonObject.hpp>
+#endif
 #include <lzf.hpp>
 #include <md5.hpp>
 #include <MemoryRefReader.hpp>
@@ -26,6 +32,9 @@
 #endif
 #include <Server.hpp>
 #include <ServerServiceUdp.hpp>
+#if ENABLE_HTTP
+#include <ServerWebService.hpp>
+#endif
 #include <Socket.hpp>
 #include <string.hpp>
 #include <StringWriter.hpp>
@@ -1451,21 +1460,21 @@ int main(int argc, const char** argv)
 		std::cout << "Failed to bind UDP/4950" << std::endl;
 		return 1;
 	}
-	std::cout << "Bound to UDP/4950" << std::endl;
+	std::cout << "Bound UDP/4950" << std::endl;
 
 	if (!serv.bindUdp(bind_addr, 3960, &srv))
 	{
 		std::cout << "Failed to bind UDP/3960" << std::endl;
 		return 1;
 	}
-	std::cout << "Bound to UDP/3960" << std::endl;
+	std::cout << "Bound UDP/3960" << std::endl;
 #else
 	if (!serv.bindUdp(bind_addr, 1234, &srv))
 	{
 		std::cout << "Failed to bind UDP/1234" << std::endl;
 		return 1;
 	}
-	std::cout << "Bound to UDP/1234" << std::endl;
+	std::cout << "Bound UDP/1234" << std::endl;
 #endif
 
 #if MAX_PROXY_CONNECTIONS > 0
@@ -1478,6 +1487,50 @@ int main(int argc, const char** argv)
 		}
 		proxy.port = Endianness::toNetwork(port);
 		port += 3;
+	}
+#endif
+
+#if ENABLE_HTTP
+	ServerWebService web_srv([](Socket& s, HttpRequest&& req, ServerWebService&)
+	{
+		JsonObject obj;
+		{
+			uint32_t allocated_accounts = 0;
+			uint32_t active_accounts = 0;
+			for (auto it = account_map.begin(); it != account_map.end(); ++it)
+			{
+				++allocated_accounts;
+				if (it->second.isActive())
+				{
+					++active_accounts;
+				}
+			}
+			obj.add("allocated_accounts", allocated_accounts);
+			obj.add("active_accounts", active_accounts);
+		}
+#if MAX_PROXY_CONNECTIONS > 0
+		{
+			uint32_t active_proxies = 0;
+			for (const auto& proxy : proxies)
+			{
+				if (time::unixSecondsSince(proxy.last_traffic) <= 60)
+				{
+					++active_proxies;
+				}
+			}
+			obj.add("active_proxies", active_proxies);
+		}
+		obj.add("total_proxies", MAX_PROXY_CONNECTIONS);
+#endif
+		ServerWebService::sendText(s, obj.encodePretty());
+	});
+	if (serv.bind(/*bind_addr,*/ HTTP_PORT, &web_srv))
+	{
+		std::cout << "Bound TCP/" << HTTP_PORT << " for HTTP" << std::endl;
+	}
+	else
+	{
+		std::cout << "Failed to bind TCP/" << HTTP_PORT << " for HTTP" << std::endl;
 	}
 #endif
 
