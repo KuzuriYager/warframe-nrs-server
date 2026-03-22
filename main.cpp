@@ -1047,6 +1047,14 @@ int main(int argc, const char** argv)
 #endif
 						res.push_back(',');
 						res.append(std::to_string((packet_id & 0x20) ? e->second.reflexive_port_server : e->second.reflexive_port_client));
+						res.append(",priv,");
+#if FORCE_PROXY_CONNECTIONS
+						res.append("10.0.0.0");
+#else
+						res.append(IpAddr(e->second.local_ip).toString());
+#endif
+						res.push_back(',');
+						res.append(std::to_string((packet_id & 0x20) ? e->second.local_port_server : e->second.local_port_client));
 					_finish_query:
 						res.push_back(',');
 					}
