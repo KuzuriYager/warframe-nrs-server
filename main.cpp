@@ -735,7 +735,17 @@ int main(int argc, const char** argv)
 					std::string acctId_hex;
 					sr.str(24, acctId_hex);
 					acctId = string::hex2bin(acctId_hex);
-					sr.skip(1 + 128 + 1); // ',' NatHash ','
+					SOUP_IF_UNLIKELY (char sep = 0; sr.c(sep), sep != ',')
+					{
+						std::cout << addr.toString() << " - Malformed packet: " << string::bin2hex(data) << std::endl;
+						return;
+					}
+					sr.skip(128); // NatHash
+					SOUP_IF_UNLIKELY (char sep = 0; sr.c(sep), sep != ',')
+					{
+						std::cout << addr.toString() << " - Malformed packet: " << string::bin2hex(data) << std::endl;
+						return;
+					}
 					SocketAddr sa;
 					sa.fromString(data.substr(sr.getPosition()));
 					local_ip = sa.ip.getV4NativeEndian();
@@ -855,7 +865,12 @@ int main(int argc, const char** argv)
 					std::string acctId_hex;
 					sr.str(24, acctId_hex);
 					acctId = string::hex2bin(acctId_hex);
-					//sr.skip(1 + 128); // ',' NatHash
+					SOUP_IF_UNLIKELY (char sep = 0; sr.c(sep), sep != ',')
+					{
+						std::cout << addr.toString() << " - Malformed packet: " << string::bin2hex(data) << std::endl;
+						return;
+					}
+					//sr.skip(128); // NatHash
 				}
 				account_map.erase(acctId);
 				std::cout << addr.toString() << "#" << string::bin2hexLower(acctId) << " - Logged out" << std::endl;
@@ -1013,10 +1028,24 @@ int main(int argc, const char** argv)
 			else
 			{
 				sr.skip(1); // ','
+			#if false
 				std::string acctId_hex;
 				sr.str(24, acctId_hex);
 				std::string acctId = string::hex2bin(acctId_hex);
-				sr.skip(1 + 128 + 1); // ',' acctId_hex ',' NatHash ','
+			#else
+				sr.skip(24);
+			#endif
+				SOUP_IF_UNLIKELY (char sep = 0; sr.c(sep), sep != ',')
+				{
+					std::cout << addr.toString() << " - Malformed packet: " << string::bin2hex(data) << std::endl;
+					return;
+				}
+				sr.skip(128); // NatHash
+				SOUP_IF_UNLIKELY (char sep = 0; sr.c(sep), sep != ',')
+				{
+					std::cout << addr.toString() << " - Malformed packet: " << string::bin2hex(data) << std::endl;
+					return;
+				}
 				std::string task_id; sr.str(1, task_id);
 				sr.skip(1); // ','
 				auto arr = string::explode(data.substr(sr.getPosition()), ',');
@@ -1107,12 +1136,27 @@ int main(int argc, const char** argv)
 					std::string acctId_hex;
 					sr.str(24, acctId_hex);
 					acctId = string::hex2bin(acctId_hex);
-					sr.skip(1 + 128 + 1); // ',' NatHash ','
+					SOUP_IF_UNLIKELY (char sep = 0; sr.c(sep), sep != ',')
+					{
+						std::cout << addr.toString() << " - Malformed packet: " << string::bin2hex(data) << std::endl;
+						return;
+					}
+					sr.skip(128); // NatHash
+					SOUP_IF_UNLIKELY (char sep = 0; sr.c(sep), sep != ',')
+					{
+						std::cout << addr.toString() << " - Malformed packet: " << string::bin2hex(data) << std::endl;
+						return;
+					}
 					sr.u8(task_id);
 					sr.skip(1); // ','
 					std::string target_hex;
 					sr.str(24, target_hex);
 					target = string::hex2bin(target_hex);
+					SOUP_IF_UNLIKELY (sr.hasMore())
+					{
+						std::cout << addr.toString() << " - Malformed packet: " << string::bin2hex(data) << std::endl;
+						return;
+					}
 				}
 
 				native_u32_t local_ip = 0;
