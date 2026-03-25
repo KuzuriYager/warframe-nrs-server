@@ -1600,7 +1600,14 @@ int main(int argc, const char** argv)
 		if (req.path == "/")
 		{
 			//ServerWebService::sendHtml(s, string::fromFile("index.html"));
-			ServerWebService::sendText(s, "Welcome to this deployment of e-nrs!\r\n\r\nAvailable HTTP endpoints:\r\n- /api/stats");
+			ServerWebService::sendText(s,
+				"Welcome to this deployment of e-nrs!\r\n"
+				"\r\n"
+				"Available HTTP endpoints:\r\n"
+				"- /api/stats\r\n"
+				"- /api/me\r\n"
+				"- /api/me/accounts\r\n"
+			);
 		}
 		else if (req.path == "/api/stats")
 		{
@@ -1635,12 +1642,29 @@ int main(int argc, const char** argv)
 #endif
 			ServerWebService::sendText(s, obj.encodePretty());
 		}
+		else if (req.path == "/api/me")
+		{
+			ServerWebService::sendText(s, s.peer.ip.toString());
+		}
+		else if (req.path == "/api/me/accounts")
+		{
+			const auto reflexive_ip = s.peer.ip.getV4NativeEndian();
+			JsonArray arr;
+			for (auto it = account_map.begin(); it != account_map.end(); ++it)
+			{
+				if (it->second.reflexive_ip == reflexive_ip && it->second.isActive())
+				{
+					arr.children.emplace_back(soup::make_unique<JsonString>(string::bin2hexLower(it->first)));
+				}
+			}
+			ServerWebService::sendText(s, arr.encodePretty());
+		}
 		else
 		{
 			ServerWebService::send404(s);
 		}
 	});
-	if (serv.bind(/*bind_addr,*/ HTTP_PORT, &web_srv))
+	if (serv.bind(bind_addr, HTTP_PORT, &web_srv))
 	{
 		std::cout << "Bound TCP/" << HTTP_PORT << " for HTTP" << std::endl;
 	}
