@@ -1614,6 +1614,7 @@ int main(int argc, const char** argv)
 				"- /api/me/accounts\r\n"
 				"- /api/me/proxies\r\n"
 				"- /api/account/:id\r\n"
+				"- /api/session/:id\r\n"
 			);
 		}
 		else if (req.path == "/api/stats")
@@ -1715,6 +1716,41 @@ int main(int argc, const char** argv)
 				}
 			}
 			ServerWebService::sendText(s, obj.encodePretty());
+		}
+		else if (req.path.substr(0, 13) == "/api/session/")
+		{
+			UniquePtr<JsonNode> obj;
+			if (req.path.size() == 13 + 24)
+			{
+				const std::string sub = R"(":{"id":")" + req.path.substr(13);
+				auto peers = soup::make_unique<JsonArray>();
+				for (auto it = account_map.begin(); it != account_map.end(); ++it)
+				{
+					if (it->second.isActive())
+					{
+						if (size_t pos = it->second.presence.find(sub); pos != std::string::npos)
+						{
+							if (!obj)
+							{
+								pos += 2;
+								obj = json::decode(it->second.presence.data() + pos, it->second.presence.size() - pos);
+								if (obj && !obj->isObj())
+								{
+									obj.reset();
+								}
+							}
+							peers->children.emplace_back(soup::make_unique<JsonString>(string::bin2hexLower(it->first)));
+						}
+					}
+				}
+				if (obj)
+				{
+					obj->reinterpretAsObj().add("_players", std::move(peers));
+					ServerWebService::sendText(s, obj->reinterpretAsObj().encodePretty());
+					return;
+				}
+			}
+			ServerWebService::sendText(s, "{}");
 		}
 		else
 		{
