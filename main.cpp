@@ -1,6 +1,12 @@
 #include <iostream>
 #include <unordered_map>
 
+#if DEPLOYMENT
+	#define NRS_PORTS { 4950, 3960 }
+#else
+	#define NRS_PORTS { 1234 }
+#endif
+
 #define ENABLE_SHADOW_REALM DEPLOYMENT
 #define BANISH_U41_1_TO_SHADOW_REALM DEPLOYMENT
 
@@ -13,23 +19,21 @@
 #define ENABLE_HTTP true
 #define HTTP_PORT 4950
 
+#define USERNAMES true
+
 #include <crc32.hpp>
 #include <crc32c.hpp>
 /*#if IS_LAN_DEPLOYMENT
 #include <dhcp.hpp>
 #endif*/
-#if ENABLE_HTTP
-#include <JsonObject.hpp>
-#endif
+#include <json.hpp>
 #include <lzf.hpp>
 #include <md5.hpp>
 #include <MemoryRefReader.hpp>
 #if IS_LAN_DEPLOYMENT
 #include <netAdaptor.hpp>
 #endif
-#if MAX_PROXY_CONNECTIONS > 0
 #include <netInfo.hpp>
-#endif
 #include <Server.hpp>
 #include <ServerServiceUdp.hpp>
 #if ENABLE_HTTP
@@ -243,6 +247,10 @@ struct AccountData
 
 	time_t last_nat_bind;
 
+#if USERNAMES
+	std::string username;
+#endif
+
 	bool isActive() const noexcept
 	{
 		return time::unixSecondsSince(last_nat_bind) <= 120;
@@ -346,6 +354,7 @@ static void send_introduction(Socket& s, const std::string& from_acctId, const s
 	udp_send(s, to_addr, packData(sw.data, salt), is_dtls);
 }
 
+static network_u32_t this_machine_ip = 0;
 #if MAX_PROXY_CONNECTIONS > 0
 struct Proxy : public ServerServiceUdp
 {
@@ -388,7 +397,6 @@ struct Proxy : public ServerServiceUdp
 		}
 	}
 };
-static network_u32_t proxy_ip = 0;
 static Proxy proxies[MAX_PROXY_CONNECTIONS];
 
 static network_u16_t get_proxy(network_u32_t left_ip, bool left_is_server, network_u32_t right_ip, bool right_is_server)
@@ -850,6 +858,19 @@ int main(int argc, const char** argv)
 					ser_str(sw, salt, tmp);
 				}
 				udp_send(s, addr, packData(sw.data, salt), is_dtls);
+
+#if USERNAMES
+				if (data->username.empty()
+					&& data->presence.find("\"hid\":\"" + string::bin2hexLower(acctId)) != std::string::npos
+					)
+				{
+					for (const uint16_t& port : NRS_PORTS)
+					{
+						send_introduction(s, "333333333333", acctId, SocketAddr(this_machine_ip, (native_u16_t)port), SocketAddr(data->reflexive_ip, data->reflexive_port_server), IT_FROM_PEER, 69, salt, is_dtls);
+						break;
+					}
+				}
+#endif
 			}
 			break;
 
@@ -1067,13 +1088,13 @@ int main(int argc, const char** argv)
 #if MAX_PROXY_CONNECTIONS > 0 && PROXYING_FOR_LEGACY
 							if (auto proxy_port = get_proxy(addr.ip.getV4(), false, Endianness::toNetwork(e->second.reflexive_ip), (packet_id & 0x20)))
 							{
-								res.append(IpAddr(proxy_ip).toString());
+								res.append(IpAddr(this_machine_ip).toString());
 								res.push_back(',');
 								res.append(std::to_string(Endianness::toNative(proxy_port)));
 							}
 							else if (auto proxy_port = get_proxy(Endianness::toNetwork(e->second.reflexive_ip), (packet_id & 0x20), addr.ip.getV4(), false))
 							{
-								res.append(IpAddr(proxy_ip).toString());
+								res.append(IpAddr(this_machine_ip).toString());
 								res.push_back(',');
 								res.append(std::to_string(Endianness::toNative(proxy_port)));
 							}
@@ -1210,7 +1231,7 @@ int main(int argc, const char** argv)
 							if (proxy_port != 0)
 							{
 								std::cout << " with proxy port " << Endianness::toNative(proxy_port) << " in reserve";
-								send_introduction(s, acctId, target, SocketAddr(proxy_ip, proxy_port), to_addr, IT_FROM_PEER, task_id, e->second.salt, e->second.is_dtls);
+								send_introduction(s, acctId, target, SocketAddr(this_machine_ip, proxy_port), to_addr, IT_FROM_PEER, task_id, e->second.salt, e->second.is_dtls);
 							}
 						}
 #endif
@@ -1241,8 +1262,8 @@ int main(int argc, const char** argv)
 						SocketAddr to_addr(e->second.reflexive_ip, e->second.reflexive_port_server);
 						if (auto proxy_port = setup_proxying(addr.ip.getV4(), addr.port, false, to_addr.ip.getV4(), to_addr.port, true))
 						{
-							send_introduction(s, target, acctId, SocketAddr(proxy_ip, proxy_port), addr, IT_TO_PROXY, task_id, salt, is_dtls);
-							send_introduction(s, acctId, target, SocketAddr(proxy_ip, proxy_port), to_addr, IT_VIA_PROXY, task_id, e->second.salt, e->second.is_dtls);
+							send_introduction(s, target, acctId, SocketAddr(this_machine_ip, proxy_port), addr, IT_TO_PROXY, task_id, salt, is_dtls);
+							send_introduction(s, acctId, target, SocketAddr(this_machine_ip, proxy_port), to_addr, IT_VIA_PROXY, task_id, e->second.salt, e->second.is_dtls);
 							std::cout << addr.toString() << "#" << string::bin2hexLower(acctId) << " - Obtained proxy port " << Endianness::toNative(proxy_port) << " to connect to " << string::bin2hexLower(target) << std::endl;
 						}
 					}
@@ -1438,35 +1459,81 @@ int main(int argc, const char** argv)
 			}
 			break;
 
-		case 0x00: // Custom message from SpaceNinjaServer
+		case 0x00:
 			{
 				std::string message = data.substr(sr.getPosition());
-				std::cout << addr.toString() << " - " << message << std::endl;
-				auto arr = string::explode(message, ',');
-				if (arr.size() == 3)
+				if (message.size() > 3 && message[0] == 0 && message[1] == 0 && (uint8_t)message[2] == (uint8_t)0x80)
 				{
-					if (auto e = account_map.find(string::hex2bin(arr[2])); e != account_map.end())
+					// P2P introduction
+					// 00000080 15 02 74 <taskId> <platformFamily?> <acctId> <str:sessionInfoJson>
+
+					/*size_t pos = message.rfind("{\""); // JSON is not nested afaict, so this should be a good way to find the start.
+					if (pos != std::string::npos)
 					{
-						if (e->second.isActive())
+						std::cout << addr.toString() << " - Coaxed into providing more information: " << message.substr(pos) << std::endl;
+					}
+					else
+					{
+						// No session info json provided
+					}*/
+
+#if USERNAMES
+					std::string hostName;
+					if (size_t pos = message.find(R"("hostName":)"); pos != std::string::npos)
+					{
+						pos += 11;
+						if (auto j = json::decode(message.data() + pos, message.size() - pos); j && j->isStr())
 						{
-							if (arr[0] == "addPendingFriend")
+							hostName = std::move(j->reinterpretAsStr().value);
+						}
+					}
+					if (!hostName.empty())
+					{
+						if (size_t pos = message.find(R"("hostId":)"); pos != std::string::npos)
+						{
+							pos += 9;
+							if (auto j = json::decode(message.data() + pos, message.size() - pos); j && j->isStr())
 							{
-								e->second.sendFriendRefresh(s, 9);
-							}
-							else if (arr[0] == "addFriend")
-							{
-								//e->second.sendSocialChange(s, 29, "{\"id\":\"" + arr[1] + "\",\"avatarImage\":\"\",\"level\":0}");
-								//e->second.sendSocialChange(s, 29, "{\"id\":\"" + arr[1] + "\"}");
-								e->second.sendFriendRefresh(s, 9); // Unfaithful, but this way the avatarImage and level don't get reset by this notification.
-							}
-							else if (arr[0] == "removeFriend")
-							{
-								e->second.sendSocialChange(s, 30, "{\"id\":\"" + arr[1] + "\"}");
+								std::string hostId = string::hex2bin(j->reinterpretAsStr().value);
+								if (auto e = account_map.find(hostId); e != account_map.end())
+								{
+									std::cout << addr.toString() << " - Provided username for " << j->reinterpretAsStr().value << ": " << hostName << std::endl;
+									e->second.username = std::move(hostName);
+								}
 							}
 						}
-						else
+					}
+#endif
+				}
+				else
+				{
+					std::cout << addr.toString() << " - Custom message: " << message << std::endl;
+					auto arr = string::explode(message, ',');
+					if (arr.size() == 3)
+					{
+						if (auto e = account_map.find(string::hex2bin(arr[2])); e != account_map.end())
 						{
-							account_map.erase(e);
+							if (e->second.isActive())
+							{
+								if (arr[0] == "addPendingFriend")
+								{
+									e->second.sendFriendRefresh(s, 9);
+								}
+								else if (arr[0] == "addFriend")
+								{
+									//e->second.sendSocialChange(s, 29, "{\"id\":\"" + arr[1] + "\",\"avatarImage\":\"\",\"level\":0}");
+									//e->second.sendSocialChange(s, 29, "{\"id\":\"" + arr[1] + "\"}");
+									e->second.sendFriendRefresh(s, 9); // Unfaithful, but this way the avatarImage and level don't get reset by this notification.
+								}
+								else if (arr[0] == "removeFriend")
+								{
+									e->second.sendSocialChange(s, 30, "{\"id\":\"" + arr[1] + "\"}");
+								}
+							}
+							else
+							{
+								account_map.erase(e);
+							}
 						}
 					}
 				}
@@ -1493,38 +1560,23 @@ int main(int argc, const char** argv)
 	}
 #endif
 
-#if MAX_PROXY_CONNECTIONS > 0
-	proxy_ip = bind_addr.getV4();
-	if (proxy_ip == 0)
+	this_machine_ip = bind_addr.getV4();
+	if (this_machine_ip == 0)
 	{
 		auto addr = netInfo::getPublicAddressV4();
-		std::cout << "proxy_ip = " << addr.toString() << std::endl;
-		proxy_ip = addr.getV4();
+		std::cout << "This machine's IP address: " << addr.toString() << std::endl;
+		this_machine_ip = addr.getV4();
 	}
-#endif
 
-#if DEPLOYMENT
-	if (!serv.bindUdp(bind_addr, 4950, &srv))
+	for (const uint16_t& port : NRS_PORTS)
 	{
-		std::cout << "Failed to bind UDP/4950" << std::endl;
-		return 1;
+		if (!serv.bindUdp(bind_addr, port, &srv))
+		{
+			std::cout << "Failed to bind UDP/" << port << std::endl;
+			return 1;
+		}
+		std::cout << "Bound UDP/" << port << std::endl;
 	}
-	std::cout << "Bound UDP/4950" << std::endl;
-
-	if (!serv.bindUdp(bind_addr, 3960, &srv))
-	{
-		std::cout << "Failed to bind UDP/3960" << std::endl;
-		return 1;
-	}
-	std::cout << "Bound UDP/3960" << std::endl;
-#else
-	if (!serv.bindUdp(bind_addr, 1234, &srv))
-	{
-		std::cout << "Failed to bind UDP/1234" << std::endl;
-		return 1;
-	}
-	std::cout << "Bound UDP/1234" << std::endl;
-#endif
 
 #if MAX_PROXY_CONNECTIONS > 0
 	uint16_t port = 4200;
