@@ -1607,6 +1607,7 @@ int main(int argc, const char** argv)
 				"- /api/stats\r\n"
 				"- /api/me\r\n"
 				"- /api/me/accounts\r\n"
+				"- /api/account/:id\r\n"
 			);
 		}
 		else if (req.path == "/api/stats")
@@ -1658,6 +1659,33 @@ int main(int argc, const char** argv)
 				}
 			}
 			ServerWebService::sendText(s, arr.encodePretty());
+		}
+		else if (req.path.substr(0, 13) == "/api/account/")
+		{
+			JsonObject obj;
+			if (auto e = account_map.find(string::hex2bin(req.path.substr(13))); e != account_map.end())
+			{
+				if (e->second.isActive())
+				{
+					// Data available via NRS
+					obj.add("reflexive_ip", e->second.reflexive_ip);
+					obj.add("reflexive_port_client", e->second.reflexive_port_client);
+					obj.add("reflexive_port_server", e->second.reflexive_port_server);
+					obj.add("local_ip", e->second.local_ip);
+					obj.add("local_port_client", e->second.local_port_client);
+					obj.add("local_port_server", e->second.local_port_server);
+					obj.add("status", e->second.status);
+					obj.add("presence", e->second.presence);
+#if USERNAMES
+					// Data available via SNS and conditionally via P2P
+					if (!e->second.username.empty())
+					{
+						obj.add("username", e->second.username);
+					}
+#endif
+				}
+			}
+			ServerWebService::sendText(s, obj.encodePretty());
 		}
 		else
 		{
