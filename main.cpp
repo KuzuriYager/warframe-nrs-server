@@ -1505,7 +1505,8 @@ int main(int argc, const char** argv)
 								std::string hostId = string::hex2bin(j->reinterpretAsStr().value);
 								if (auto e = account_map.find(hostId); e != account_map.end())
 								{
-									std::cout << addr.toString() << " - Provided username for " << j->reinterpretAsStr().value << ": " << hostName << std::endl;
+									// TODO: Sanitise platform suffix so terminal doesn't get polluted?
+									//std::cout << addr.toString() << " - Provided username for " << j->reinterpretAsStr().value << ": " << hostName << std::endl;
 									e->second.username = std::move(hostName);
 								}
 							}
