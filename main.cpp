@@ -26,6 +26,9 @@
 /*#if IS_LAN_DEPLOYMENT
 #include <dhcp.hpp>
 #endif*/
+#if ENABLE_HTTP
+#include <HttpRequest.hpp>
+#endif
 #include <json.hpp>
 #include <lzf.hpp>
 #include <md5.hpp>
@@ -1594,36 +1597,48 @@ int main(int argc, const char** argv)
 #if ENABLE_HTTP
 	ServerWebService web_srv([](Socket& s, HttpRequest&& req, ServerWebService&)
 	{
-		JsonObject obj;
+		if (req.path == "/")
 		{
-			uint32_t allocated_accounts = 0;
-			uint32_t active_accounts = 0;
-			for (auto it = account_map.begin(); it != account_map.end(); ++it)
-			{
-				++allocated_accounts;
-				if (it->second.isActive())
-				{
-					++active_accounts;
-				}
-			}
-			obj.add("allocated_accounts", allocated_accounts);
-			obj.add("active_accounts", active_accounts);
+			//ServerWebService::sendHtml(s, string::fromFile("index.html"));
+			ServerWebService::sendText(s, "Welcome to this deployment of e-nrs!\r\n\r\nAvailable HTTP endpoints:\r\n- /api/stats");
 		}
+		else if (req.path == "/api/stats")
+		{
+			JsonObject obj;
+			{
+				uint32_t allocated_accounts = 0;
+				uint32_t active_accounts = 0;
+				for (auto it = account_map.begin(); it != account_map.end(); ++it)
+				{
+					++allocated_accounts;
+					if (it->second.isActive())
+					{
+						++active_accounts;
+					}
+				}
+				obj.add("allocated_accounts", allocated_accounts);
+				obj.add("active_accounts", active_accounts);
+			}
 #if MAX_PROXY_CONNECTIONS > 0
-		{
-			uint32_t active_proxies = 0;
-			for (const auto& proxy : proxies)
 			{
-				if (time::unixSecondsSince(proxy.last_traffic) <= 60)
+				uint32_t active_proxies = 0;
+				for (const auto& proxy : proxies)
 				{
-					++active_proxies;
+					if (time::unixSecondsSince(proxy.last_traffic) <= 60)
+					{
+						++active_proxies;
+					}
 				}
+				obj.add("active_proxies", active_proxies);
 			}
-			obj.add("active_proxies", active_proxies);
-		}
-		obj.add("total_proxies", MAX_PROXY_CONNECTIONS);
+			obj.add("total_proxies", MAX_PROXY_CONNECTIONS);
 #endif
-		ServerWebService::sendText(s, obj.encodePretty());
+			ServerWebService::sendText(s, obj.encodePretty());
+		}
+		else
+		{
+			ServerWebService::send404(s);
+		}
 	});
 	if (serv.bind(/*bind_addr,*/ HTTP_PORT, &web_srv))
 	{
