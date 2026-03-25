@@ -399,6 +399,11 @@ struct Proxy : public ServerServiceUdp
 			std::cout << "Unsolicited traffic on proxy port " << Endianness::toNative(port) << " from " << addr.toString() << std::endl;
 		}
 	}
+
+	bool isActive() const noexcept
+	{
+		return time::unixSecondsSince(last_traffic) <= 60;
+	}
 };
 static Proxy proxies[MAX_PROXY_CONNECTIONS];
 
@@ -410,7 +415,7 @@ static network_u16_t get_proxy(network_u32_t left_ip, bool left_is_server, netwo
 	}
 	for (auto& proxy : proxies)
 	{
-		if (proxy.left_ip == left_ip && proxy.right_ip == right_ip && proxy.left_is_server == left_is_server && proxy.right_is_server == right_is_server && time::unixSecondsSince(proxy.last_traffic) <= 60)
+		if (proxy.left_ip == left_ip && proxy.right_ip == right_ip && proxy.left_is_server == left_is_server && proxy.right_is_server == right_is_server && proxy.isActive())
 		{
 			proxy.last_traffic = time::unixSeconds();
 			return proxy.port;
@@ -433,7 +438,7 @@ static network_u16_t setup_proxying(network_u32_t left_ip, network_u16_t left_po
 			proxy.last_traffic = time::unixSeconds();
 			return proxy.port;
 		}
-		if (free_proxy == nullptr && time::unixSecondsSince(proxy.last_traffic) > 60)
+		if (free_proxy == nullptr && !proxy.isActive())
 		{
 			free_proxy = &proxy;
 		}
@@ -1607,6 +1612,7 @@ int main(int argc, const char** argv)
 				"- /api/stats\r\n"
 				"- /api/me\r\n"
 				"- /api/me/accounts\r\n"
+				"- /api/me/proxies\r\n"
 				"- /api/account/:id\r\n"
 			);
 		}
@@ -1632,7 +1638,7 @@ int main(int argc, const char** argv)
 				uint32_t active_proxies = 0;
 				for (const auto& proxy : proxies)
 				{
-					if (time::unixSecondsSince(proxy.last_traffic) <= 60)
+					if (proxy.isActive())
 					{
 						++active_proxies;
 					}
@@ -1658,6 +1664,29 @@ int main(int argc, const char** argv)
 					arr.children.emplace_back(soup::make_unique<JsonString>(string::bin2hexLower(it->first)));
 				}
 			}
+			ServerWebService::sendText(s, arr.encodePretty());
+		}
+		else if (req.path == "/api/me/proxies")
+		{
+			const auto reflexive_ip = s.peer.ip.getV4();
+			JsonArray arr;
+#if MAX_PROXY_CONNECTIONS > 0
+			for (const auto& proxy : proxies)
+			{
+				if ((proxy.left_ip == reflexive_ip || proxy.right_ip == reflexive_ip) && proxy.isActive())
+				{
+					JsonObject& obj = arr.children.emplace_back(soup::make_unique<JsonObject>())->reinterpretAsObj();
+					obj.add("left_ip", Endianness::toNative(proxy.left_ip));
+					obj.add("left_port", Endianness::toNative(proxy.left_port));
+					obj.add("left_is_server", proxy.left_is_server);
+					obj.add("right_ip", Endianness::toNative(proxy.right_ip));
+					obj.add("right_port", Endianness::toNative(proxy.right_port));
+					obj.add("right_is_server", proxy.right_is_server);
+					obj.add("port", Endianness::toNative(proxy.port));
+					obj.add("last_traffic", proxy.last_traffic);
+				}
+			}
+#endif
 			ServerWebService::sendText(s, arr.encodePretty());
 		}
 		else if (req.path.substr(0, 13) == "/api/account/")
