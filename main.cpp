@@ -490,7 +490,7 @@ struct Proxy : public ServerServiceUdp
 
 	void callback(Socket& s, SocketAddr&& addr, std::string&& data)
 	{
-		//std::cout << "Traffic on proxy port " << Endianness::toNative(port) << " from " << addr.toString() << ": " << string::bin2hex(data) << std::endl;
+		//std::cout << addr.toString() << " - Traffic on proxy port " << Endianness::toNative(port) << ": " << string::bin2hex(data) << std::endl;
 
 		SOUP_IF_UNLIKELY (left_port == 0 || right_port == 0) // Setup phase?
 		{
@@ -523,6 +523,14 @@ struct Proxy : public ServerServiceUdp
 				right_port = addr.port;
 				std::cout << addr.toString() << " - " << right_id.toString() << " on proxy port " << Endianness::toNative(port) << std::endl;
 			}
+			else if ((addr.ip.getV4() == left_ip && addr.port == left_port) || (addr.ip.getV4() == right_ip && addr.port == right_port))
+			{
+				// Can't route this traffic just yet
+			}
+			else
+			{
+				std::cout << addr.toString() << " - Unexpected traffic on proxy port " << Endianness::toNative(port) << ": " << string::bin2hex(data) << std::endl;
+			}
 			if (left_port == 0 || right_port == 0) // Still setup phase?
 			{
 				return;
@@ -541,7 +549,7 @@ struct Proxy : public ServerServiceUdp
 		}
 		else
 		{
-			std::cout << "Unsolicited traffic on proxy port " << Endianness::toNative(port) << " from " << addr.toString() << std::endl;
+			std::cout << addr.toString() << " - Unexpected traffic on proxy port " << Endianness::toNative(port) << ": " << string::bin2hex(data) << std::endl;
 		}
 	}
 
