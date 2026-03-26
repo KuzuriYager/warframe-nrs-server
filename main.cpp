@@ -474,6 +474,10 @@ static network_u16_t setup_proxying(network_u32_t left_ip, network_u16_t left_po
 }
 #endif
 
+#if ENABLE_HTTP
+static SharedPtr<Socket> nrs_socket;
+#endif
+
 int main(int argc, const char** argv)
 {
 #if USE_DTLSBRIDGE
@@ -484,6 +488,13 @@ int main(int argc, const char** argv)
 
 	ServerServiceUdp srv([](Socket& s, SocketAddr&& addr, std::string&& data, ServerServiceUdp&)
 	{
+#if ENABLE_HTTP
+		if (!nrs_socket)
+		{
+			nrs_socket = Scheduler::get()->getShared(s);
+		}
+#endif
+
 		bool is_dtls = false;
 #if USE_DTLSBRIDGE
 		{
@@ -1722,6 +1733,7 @@ int main(int argc, const char** argv)
 				"- /api/me/proxies\r\n"
 				"- /api/account/:id\r\n"
 				"- /api/session/:id\r\n"
+				"- /api/invite/:from/:to\r\n"
 			);
 		}
 		else if (req.path == "/api/stats")
@@ -1858,6 +1870,31 @@ int main(int argc, const char** argv)
 				}
 			}
 			ServerWebService::sendText(s, "{}");
+		}
+		else if (req.path.substr(0, 12) == "/api/invite/")
+		{
+#if USERNAMES
+			if (req.path.size() == 12 + 24 + 1 + 24
+				&& nrs_socket
+				)
+			{
+				const std::string from_id = string::hex2bin(req.path.substr(12, 24));
+				const std::string to_id = string::hex2bin(req.path.substr(12 + 24 + 1));
+				if (auto from_e = account_map.find(from_id); from_e != account_map.end())
+				{
+					if (!from_e->second.username.empty())
+					{
+						if (auto to_e = account_map.find(to_id); to_e != account_map.end())
+						{
+							to_e->second.sendGameInvite(*nrs_socket, from_id, to_id, from_e->second.presence, from_e->second.username, 0, from_e->second.status);
+							ServerWebService::sendText(s, "true");
+							return;
+						}
+					}
+				}
+			}
+#endif
+			ServerWebService::sendText(s, "false");
 		}
 		else
 		{
