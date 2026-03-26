@@ -2,9 +2,9 @@
 #include <unordered_map>
 
 #if DEPLOYMENT
-	#define NRS_PORTS { 4950, 3960 }
+	#define PORTS { 4950, 3960 }
 #else
-	#define NRS_PORTS { 1234 }
+	#define PORTS { 1234 }
 #endif
 
 #define ENABLE_SHADOW_REALM DEPLOYMENT
@@ -18,7 +18,6 @@
 #define FORCE_PROXY_CONNECTIONS false
 
 #define ENABLE_HTTP true
-#define HTTP_PORT 4950
 
 #define USERNAMES true
 
@@ -943,7 +942,7 @@ int main(int argc, const char** argv)
 #if USERNAMES
 					else if (data->presence.find("\"hid\":\"" + string::bin2hexLower(acctId)) != std::string::npos)
 					{
-						for (const uint16_t& port : NRS_PORTS)
+						for (const uint16_t& port : PORTS)
 						{
 							send_introduction(s, "333333333333", acctId, SocketAddr(this_machine_ip, (native_u16_t)port), SocketAddr(data->reflexive_ip, data->reflexive_port_server), IT_FROM_PEER, 69, salt, is_dtls);
 							break;
@@ -1694,7 +1693,7 @@ int main(int argc, const char** argv)
 		this_machine_ip = addr.getV4();
 	}
 
-	for (const uint16_t& port : NRS_PORTS)
+	for (const uint16_t& port : PORTS)
 	{
 		if (!serv.bindUdp(bind_addr, port, &srv))
 		{
@@ -1901,13 +1900,16 @@ int main(int argc, const char** argv)
 			ServerWebService::send404(s);
 		}
 	});
-	if (serv.bind(bind_addr, HTTP_PORT, &web_srv))
+	for (const uint16_t& port : PORTS)
 	{
-		std::cout << "Bound TCP/" << HTTP_PORT << " for HTTP" << std::endl;
-	}
-	else
-	{
-		std::cout << "Failed to bind TCP/" << HTTP_PORT << " for HTTP" << std::endl;
+		if (serv.bind(bind_addr, port, &web_srv))
+		{
+			std::cout << "Bound TCP/" << port << " for HTTP" << std::endl;
+		}
+		else
+		{
+			std::cout << "Failed to bind TCP/" << port << " for HTTP" << std::endl;
+		}
 	}
 #endif
 
