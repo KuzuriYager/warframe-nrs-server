@@ -407,10 +407,12 @@ static network_u32_t this_machine_ip = 0;
 #if MAX_PROXY_CONNECTIONS > 0
 struct Proxy : public ServerServiceUdp
 {
+	std::string left_id;
+	std::string right_id;
 	network_u32_t left_ip;
 	network_u32_t right_ip;
-	network_u16_t left_port;
-	network_u16_t right_port;
+	network_u16_t left_port = 0xffff;
+	network_u16_t right_port = 0xffff;
 	network_u16_t port;
 	bool left_is_server;
 	bool right_is_server;
@@ -428,15 +430,52 @@ struct Proxy : public ServerServiceUdp
 
 	void callback(Socket& s, SocketAddr&& addr, std::string&& data)
 	{
-		if (addr.ip.getV4() == left_ip /*&& addr.port == left_port*/)
+		//std::cout << "Traffic on proxy port " << Endianness::toNative(port) << " from " << addr.toString() << ": " << string::bin2hex(data) << std::endl;
+
+		SOUP_IF_UNLIKELY (left_port == 0 || right_port == 0) // Setup phase?
 		{
-			left_port = addr.port;
+			MemoryRefReader sr(data);
+			SOUP_IF_UNLIKELY (!unpackData(addr, sr, data))
+			{
+				return;
+			}
+			if (data.find(left_id) != std::string::npos)
+			{
+				left_ip = addr.ip.getV4();
+				left_port = addr.port;
+				std::cout << addr.toString() << " - " << string::bin2hexLower(left_id) << " on proxy port " << Endianness::toNative(port) << std::endl;
+			}
+			else if (data.find(right_id) != std::string::npos)
+			{
+				right_ip = addr.ip.getV4();
+				right_port = addr.port;
+				std::cout << addr.toString() << " - " << string::bin2hexLower(right_id) << " on proxy port " << Endianness::toNative(port) << std::endl;
+			}
+			else if (data.find(string::bin2hexLower(left_id)) != std::string::npos)
+			{
+				left_ip = addr.ip.getV4();
+				left_port = addr.port;
+				std::cout << addr.toString() << " - " << string::bin2hexLower(left_id) << " on proxy port " << Endianness::toNative(port) << std::endl;
+			}
+			else if (data.find(string::bin2hexLower(right_id)) != std::string::npos)
+			{
+				right_ip = addr.ip.getV4();
+				right_port = addr.port;
+				std::cout << addr.toString() << " - " << string::bin2hexLower(right_id) << " on proxy port " << Endianness::toNative(port) << std::endl;
+			}
+			if (left_port == 0 || right_port == 0) // Still setup phase?
+			{
+				return;
+			}
+		}
+
+		if (addr.ip.getV4() == left_ip && addr.port == left_port)
+		{
 			last_traffic = time::unixSeconds();
 			s.udpServerSend(SocketAddr(right_ip, right_port), std::move(data));
 		}
-		else if (addr.ip.getV4() == right_ip /*&& addr.port == right_port*/)
+		else if (addr.ip.getV4() == right_ip && addr.port == right_port)
 		{
-			right_port = addr.port;
 			last_traffic = time::unixSeconds();
 			s.udpServerSend(SocketAddr(left_ip, left_port), std::move(data));
 		}
@@ -453,15 +492,17 @@ struct Proxy : public ServerServiceUdp
 };
 static Proxy proxies[MAX_PROXY_CONNECTIONS];
 
-static network_u16_t get_proxy(network_u32_t left_ip, bool left_is_server, network_u32_t right_ip, bool right_is_server)
+static network_u16_t get_proxy(const std::string& left_id, bool left_is_server, const std::string& right_id, bool right_is_server)
 {
-	if (left_ip == right_ip)
+	if (left_id == right_id)
 	{
 		return 0;
 	}
 	for (auto& proxy : proxies)
 	{
-		if (proxy.left_ip == left_ip && proxy.right_ip == right_ip && proxy.left_is_server == left_is_server && proxy.right_is_server == right_is_server && proxy.isActive())
+		if (proxy.left_id == left_id && proxy.right_id == right_id && proxy.left_is_server == left_is_server && proxy.right_is_server == right_is_server
+			&& proxy.isActive()
+			)
 		{
 			proxy.last_traffic = time::unixSeconds();
 			return proxy.port;
@@ -470,16 +511,16 @@ static network_u16_t get_proxy(network_u32_t left_ip, bool left_is_server, netwo
 	return 0;
 }
 
-static network_u16_t setup_proxying(network_u32_t left_ip, network_u16_t left_port, bool left_is_server, network_u32_t right_ip, network_u16_t right_port, bool right_is_server)
+static network_u16_t setup_proxying(const std::string& left_id, bool left_is_server, const std::string& right_id, bool right_is_server)
 {
-	if (left_ip == right_ip)
+	if (left_id == right_id)
 	{
 		return 0;
 	}
 	Proxy* free_proxy = nullptr;
 	for (auto& proxy : proxies)
 	{
-		if (proxy.left_ip == left_ip && proxy.right_ip == right_ip && proxy.left_is_server == left_is_server && proxy.right_is_server == right_is_server)
+		if (proxy.left_id == left_id && proxy.right_id == right_id && proxy.left_is_server == left_is_server && proxy.right_is_server == right_is_server)
 		{
 			proxy.last_traffic = time::unixSeconds();
 			return proxy.port;
@@ -491,13 +532,17 @@ static network_u16_t setup_proxying(network_u32_t left_ip, network_u16_t left_po
 	}
 	if (free_proxy)
 	{
-		free_proxy->left_ip = left_ip;
-		free_proxy->right_ip = right_ip;
-		free_proxy->left_port = left_port;
-		free_proxy->right_port = right_port;
+		// Claim proxy
+		free_proxy->left_id = left_id;
+		free_proxy->right_id = right_id;
 		free_proxy->left_is_server = left_is_server;
 		free_proxy->right_is_server = right_is_server;
 		free_proxy->last_traffic = time::unixSeconds();
+
+		// Reset proxy to setup phase
+		free_proxy->left_port = 0;
+		free_proxy->right_port = 0;
+
 		return free_proxy->port;
 	}
 	return 0;
@@ -1157,7 +1202,7 @@ int main(int argc, const char** argv)
 			else
 			{
 				sr.skip(1); // ','
-			#if false
+			#if true
 				std::string acctId_hex;
 				sr.str(24, acctId_hex);
 				std::string acctId = string::hex2bin(acctId_hex);
@@ -1189,13 +1234,13 @@ int main(int argc, const char** argv)
 						if (e->second.isActive())
 						{
 #if MAX_PROXY_CONNECTIONS > 0 && PROXYING_FOR_LEGACY
-							if (auto proxy_port = get_proxy(addr.ip.getV4(), false, Endianness::toNetwork(e->second.reflexive_ip), (packet_id & 0x20)))
+							if (auto proxy_port = get_proxy(acctId, false, target, (packet_id & 0x20)))
 							{
 								res.append(IpAddr(this_machine_ip).toString());
 								res.push_back(',');
 								res.append(std::to_string(Endianness::toNative(proxy_port)));
 							}
-							else if (auto proxy_port = get_proxy(Endianness::toNetwork(e->second.reflexive_ip), (packet_id & 0x20), addr.ip.getV4(), false))
+							else if (auto proxy_port = get_proxy(target, (packet_id & 0x20), acctId, false))
 							{
 								res.append(IpAddr(this_machine_ip).toString());
 								res.push_back(',');
@@ -1330,10 +1375,10 @@ int main(int argc, const char** argv)
 						if (is_u15_or_below(salt)) // < U15.14
 						{
 							// Check if other party already reserved a proxy port for us
-							network_u16_t proxy_port = get_proxy(to_addr.ip.getV4(), to_server, addr.ip.getV4(), from_server);
+							network_u16_t proxy_port = get_proxy(target, to_server, acctId, from_server);
 							if (proxy_port == 0)
 							{
-								proxy_port = setup_proxying(addr.ip.getV4(), addr.port, from_server, to_addr.ip.getV4(), to_addr.port, to_server);
+								proxy_port = setup_proxying(acctId, from_server, target, to_server);
 							}
 							if (proxy_port != 0)
 							{
@@ -1371,7 +1416,7 @@ int main(int argc, const char** argv)
 					if (e->second.isActive())
 					{
 						SocketAddr to_addr(e->second.reflexive_ip, e->second.reflexive_port_server);
-						if (auto proxy_port = setup_proxying(addr.ip.getV4(), addr.port, false, to_addr.ip.getV4(), to_addr.port, true))
+						if (auto proxy_port = setup_proxying(acctId, false, target, true))
 						{
 							send_introduction(s, target, acctId, SocketAddr(this_machine_ip, proxy_port), addr, IT_TO_PROXY, task_id, salt, is_dtls);
 							send_introduction(s, acctId, target, SocketAddr(this_machine_ip, proxy_port), to_addr, IT_VIA_PROXY, task_id, e->second.salt, e->second.is_dtls);
@@ -1803,9 +1848,11 @@ int main(int argc, const char** argv)
 				if ((proxy.left_ip == reflexive_ip || proxy.right_ip == reflexive_ip) && proxy.isActive())
 				{
 					JsonObject& obj = arr.children.emplace_back(soup::make_unique<JsonObject>())->reinterpretAsObj();
+					obj.add("left_id", proxy.left_id);
 					obj.add("left_ip", Endianness::toNative(proxy.left_ip));
 					obj.add("left_port", Endianness::toNative(proxy.left_port));
 					obj.add("left_is_server", proxy.left_is_server);
+					obj.add("right_id", proxy.right_id);
 					obj.add("right_ip", Endianness::toNative(proxy.right_ip));
 					obj.add("right_port", Endianness::toNative(proxy.right_port));
 					obj.add("right_is_server", proxy.right_is_server);
