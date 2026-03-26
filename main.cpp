@@ -937,6 +937,7 @@ int main(int argc, const char** argv)
 					sa.fromString(data.substr(sr.getPosition()));
 					local_ip = sa.ip.getV4NativeEndian();
 					local_port = sa.getPort();
+					sr.seekEnd();
 				}
 
 				uint32_t reflexive_ip = addr.ip.getV4NativeEndian();
