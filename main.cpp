@@ -7,8 +7,9 @@
 	#define NRS_PORTS { 1234 }
 #endif
 
-#define ENABLE_SHADOW_REALM false
+#define ENABLE_SHADOW_REALM DEPLOYMENT
 #define BANISH_U41_1_TO_SHADOW_REALM false
+#define BANISH_U42_TO_SHADOW_REALM DEPLOYMENT
 
 #define IS_LAN_DEPLOYMENT !DEPLOYMENT
 
@@ -630,8 +631,12 @@ int main(int argc, const char** argv)
 		case 0x54: // Test from client
 		case 0x74: // Test from server
 			{
+				//std::cout << addr.toString() << " - Test: " << string::bin2hex(data) << std::endl;
+
 				std::string acctId;
 				uint64_t timestamp;
+				bool is_u42 = false;
+				uint8_t task_id;
 				uint32_t local_ip;
 				uint16_t local_port;
 				std::string local_addr_str;
@@ -647,11 +652,19 @@ int main(int argc, const char** argv)
 					{
 						sr.skip(64); // NatHash
 					}
-					sr.u32_be(local_ip);
-					sr.u16_le(local_port);
-					if (!is_u15_or_below(salt))
+					if (sr.getPosition() + 1 == data.size()) // >= U42
 					{
-						ser_str(sr, salt, local_addr_str);
+						is_u42 = true;
+						sr.u8(task_id);
+					}
+					else
+					{
+						sr.u32_be(local_ip);
+						sr.u16_le(local_port);
+						if (!is_u15_or_below(salt))
+						{
+							ser_str(sr, salt, local_addr_str);
+						}
 					}
 				}
 				else
@@ -666,6 +679,14 @@ int main(int argc, const char** argv)
 					{
 						break;
 					}
+	#if BANISH_U42_TO_SHADOW_REALM
+					if (is_u42)
+					{
+						e->second.in_shadow_realm = true;
+						std::cout << addr.toString() << "#" << string::bin2hexLower(acctId) << " - Banished to the shadow realm" << std::endl;
+						break;
+					}
+	#endif
 				}
 #endif
 
@@ -703,9 +724,16 @@ int main(int argc, const char** argv)
 						{
 							sw.u64_le(timestamp);
 						}
-						sw.u32_be(local_ip);
-						sw.u16_le(local_port);
-						ser_str(sw, salt, local_addr_str);
+						if (is_u42) // >= U42
+						{
+							sw.u8(task_id);
+						}
+						else
+						{
+							sw.u32_be(local_ip);
+							sw.u16_le(local_port);
+							ser_str(sw, salt, local_addr_str);
+						}
 						sw.u32_be(reflexive_ip);
 						sw.u16_le(reflexive_port);
 					}
@@ -747,7 +775,7 @@ int main(int argc, const char** argv)
 					local_port ^= 0xAAAA;
 					if (!is_u27_or_below(salt))
 					{
-						sr.skip(2);
+						sr.skip(2); // bindingServerId + numBindingServers maybe?
 					}
 				}
 				else // < U11
@@ -868,17 +896,34 @@ int main(int argc, const char** argv)
 				udp_send(s, addr, packData(sw.data, salt), is_dtls);
 
 #if USERNAMES
-				if (data->username.empty()
-					&& data->presence.find("\"hid\":\"" + string::bin2hexLower(acctId)) != std::string::npos
-					)
-				{
-					for (const uint16_t& port : NRS_PORTS)
-					{
-						send_introduction(s, "333333333333", acctId, SocketAddr(this_machine_ip, (native_u16_t)port), SocketAddr(data->reflexive_ip, data->reflexive_port_server), IT_FROM_PEER, 69, salt, is_dtls);
-						break;
-					}
-				}
+				if (data->username.empty())
 #endif
+				{
+					if (sr.hasMore()) // U42 + Token
+					{
+#if ENABLE_SHADOW_REALM && BANISH_U42_TO_SHADOW_REALM
+						if (!data->in_shadow_realm)
+						{
+							data->in_shadow_realm = true;
+							std::cout << addr.toString() << "#" << string::bin2hexLower(acctId) << " - Banished to the shadow realm" << std::endl;
+						}
+#endif
+#if USERNAMES
+						ser_str(sr, salt, data->username);
+						//sr.skip(40); // Token
+#endif
+					}
+#if USERNAMES
+					else if (data->presence.find("\"hid\":\"" + string::bin2hexLower(acctId)) != std::string::npos)
+					{
+						for (const uint16_t& port : NRS_PORTS)
+						{
+							send_introduction(s, "333333333333", acctId, SocketAddr(this_machine_ip, (native_u16_t)port), SocketAddr(data->reflexive_ip, data->reflexive_port_server), IT_FROM_PEER, 69, salt, is_dtls);
+							break;
+						}
+					}
+#endif
+				}
 			}
 			break;
 
@@ -891,6 +936,13 @@ int main(int argc, const char** argv)
 					if (is_u11_or_below(salt))
 					{
 						// NatHash
+					}
+					else
+					{
+						if (sr.hasMore())
+						{
+							std::cout << addr.toString() << " - Logout but there's more: " << string::bin2hex(data) << std::endl;
+						}
 					}
 				}
 				else
@@ -973,6 +1025,11 @@ int main(int argc, const char** argv)
 					}
 				}
 				udp_send(s, addr, packData(sw.data, salt), is_dtls);
+
+				if (sr.hasMore())
+				{
+					std::cout << addr.toString() << " - Presence query but there's more: " << string::bin2hex(data) << std::endl;
+				}
 			}
 			else
 			{
@@ -1009,6 +1066,10 @@ int main(int argc, const char** argv)
 				sr.skip(1); // num queries?
 				std::string query;
 				sr.str(12, query);
+				if (sr.hasMore())
+				{
+					std::cout << addr.toString() << " - Query addresses but there's more: " << string::bin2hex(data) << std::endl;
+				}
 				//std::cout << addr.toString() << " - Resolving " << string::bin2hexLower(query) << std::endl;
 				if (auto e = account_map.find(query); e != account_map.end())
 				{
@@ -1163,6 +1224,10 @@ int main(int argc, const char** argv)
 					}
 					sr.u8(task_id);
 					sr.str(12, target);
+					if (sr.hasMore())
+					{
+						std::cout << addr.toString() << " - Introduction request but there's more: " << string::bin2hex(data) << std::endl;
+					}
 				}
 				else
 				{
@@ -1263,6 +1328,10 @@ int main(int argc, const char** argv)
 				sr.u8(task_id);
 				std::string target;
 				sr.str(12, target);
+				if (sr.hasMore())
+				{
+					std::cout << addr.toString() << " - Proxy request but there's more: " << string::bin2hex(data) << std::endl;
+				}
 				if (auto e = account_map.find(target); e != account_map.end())
 				{
 					if (e->second.isActive())
@@ -1294,15 +1363,6 @@ int main(int argc, const char** argv)
 			{
 				std::string acctId;
 				sr.str(12, acctId);
-#if ENABLE_SHADOW_REALM
-				if (auto e = account_map.find(acctId); e != account_map.end())
-				{
-					if (e->second.in_shadow_realm)
-					{
-						break;
-					}
-				}
-#endif
 				if (is_u11_or_below(salt))
 				{
 					sr.skip(64); // NatHash
@@ -1323,6 +1383,32 @@ int main(int argc, const char** argv)
 				std::string unk_str;
 				ser_str(sr, salt, unk_str);
 				SOUP_UNUSED(unk_str);
+#if ENABLE_SHADOW_REALM || USERNAMES
+				if (auto e = account_map.find(acctId); e != account_map.end())
+				{
+#if USERNAMES
+					if (e->second.username.empty())
+					{
+						e->second.username = inviter_name;
+					}
+					else if (e->second.username != inviter_name)
+					{
+						std::cout << addr.toString() << " - Game invite expected username " << e->second.username << " but got " << inviter_name << std::endl;
+						e->second.username = inviter_name;
+					}
+#endif
+#if ENABLE_SHADOW_REALM
+					if (e->second.in_shadow_realm)
+					{
+						break;
+					}
+#endif
+				}
+#endif
+				if (sr.hasMore())
+				{
+					std::cout << addr.toString() << " - Game invite but there's more: " << string::bin2hex(data) << std::endl;
+				}
 				//std::cout << addr.toString() << " - " << inviter_name << " (" << string::bin2hex(acctId) << ") sending invite to " << string::bin2hex(target) << std::endl;
 				if (auto e = account_map.find(target); e != account_map.end())
 				{
@@ -1370,6 +1456,10 @@ int main(int argc, const char** argv)
 				sr.str(12, target);
 				uint8_t status; // 1 = received. 3 = declined. 4 = failed to join.
 				sr.u8(status);
+				if (sr.hasMore())
+				{
+					std::cout << addr.toString() << " - Game invite response but there's more: " << string::bin2hex(data) << std::endl;
+				}
 				if (auto e = account_map.find(target); e != account_map.end())
 				{
 					if (e->second.isActive())
