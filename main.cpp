@@ -305,6 +305,21 @@ struct AccountData
 };
 static std::unordered_map<std::string, AccountData> account_map;
 
+static void collect_garbage()
+{
+	for (auto it = account_map.begin(); it != account_map.end(); )
+	{
+		if (it->second.isActive())
+		{
+			++it;
+		}
+		else
+		{
+			it = account_map.erase(it);
+		}
+	}
+}
+
 enum IntroductionType : uint8_t
 {
 	IT_FROM_PEER = 0,
@@ -811,6 +826,7 @@ int main(int argc, const char** argv)
 				}
 				else
 				{
+					collect_garbage();
 					data = &account_map.emplace(acctId, AccountData{}).first->second;
 				}
 				data->reflexive_ip = reflexive_ip;
