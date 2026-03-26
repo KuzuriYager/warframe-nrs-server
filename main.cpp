@@ -1940,13 +1940,19 @@ int main(int argc, const char** argv)
 				{
 					JsonObject& obj = arr.children.emplace_back(soup::make_unique<JsonObject>())->reinterpretAsObj();
 					obj.add("left_id", proxy.left_id.toString());
-					obj.add("left_ip", Endianness::toNative(proxy.left_ip));
-					obj.add("left_port", Endianness::toNative(proxy.left_port));
 					obj.add("left_is_server", proxy.left_is_server);
+					if (proxy.left_port != 0)
+					{
+						obj.add("left_ip", Endianness::toNative(proxy.left_ip));
+						obj.add("left_port", Endianness::toNative(proxy.left_port));
+					}
 					obj.add("right_id", proxy.right_id.toString());
-					obj.add("right_ip", Endianness::toNative(proxy.right_ip));
-					obj.add("right_port", Endianness::toNative(proxy.right_port));
 					obj.add("right_is_server", proxy.right_is_server);
+					if (proxy.right_port != 0)
+					{
+						obj.add("right_ip", Endianness::toNative(proxy.right_ip));
+						obj.add("right_port", Endianness::toNative(proxy.right_port));
+					}
 					obj.add("port", Endianness::toNative(proxy.port));
 					obj.add("last_traffic", proxy.last_traffic);
 				}
