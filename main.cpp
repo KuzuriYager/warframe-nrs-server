@@ -214,6 +214,37 @@ static std::string packData(const std::string& data, const std::string_view& sal
 	SOUP_MOVE_RETURN(sw.data);
 }
 
+static bool unpackData(const SocketAddr& addr, MemoryRefReader& sr, std::string& data)
+{
+	uint8_t unk_byte;
+	sr.u8(unk_byte);
+	if (unk_byte != 0)
+	{
+		uint16_t expected_decompressed_size = unk_byte;
+		if (unk_byte & 0x80)
+		{
+			expected_decompressed_size &= 0x3F;
+			while (unk_byte & 0x40)
+			{
+				sr.u8(unk_byte);
+				expected_decompressed_size <<= 6;
+				expected_decompressed_size |= unk_byte & 0x3F;
+			}
+		}
+
+		char buffer[0x1000];
+		const auto decompressed_size = lzf::decompress(data.data() + sr.getPosition(), data.size() - sr.getPosition(), buffer, sizeof(buffer));
+		if (decompressed_size != expected_decompressed_size)
+		{
+			std::cout << addr.toString() << " - Decompressed size mismatch (got " << decompressed_size << ", expected " << expected_decompressed_size << "): " << string::bin2hex(data) << std::endl;
+			return false;
+		}
+		data = std::string(buffer, decompressed_size);
+		sr = MemoryRefReader(data);
+	}
+	return true;
+}
+
 template <typename T>
 static void ser_str(T& s, const std::string_view& salt, std::string& str)
 {
@@ -533,32 +564,9 @@ int main(int argc, const char** argv)
 #endif
 
 		MemoryRefReader sr(data);
-
-		uint8_t unk_byte;
-		sr.u8(unk_byte);
-		if (unk_byte != 0)
+		SOUP_IF_UNLIKELY (!unpackData(addr, sr, data))
 		{
-			uint16_t expected_decompressed_size = unk_byte;
-			if (unk_byte & 0x80)
-			{
-				expected_decompressed_size &= 0x3F;
-				while (unk_byte & 0x40)
-				{
-					sr.u8(unk_byte);
-					expected_decompressed_size <<= 6;
-					expected_decompressed_size |= unk_byte & 0x3F;
-				}
-			}
-
-			char buffer[0x1000];
-			const auto decompressed_size = lzf::decompress(data.data() + sr.getPosition(), data.size() - sr.getPosition(), buffer, sizeof(buffer));
-			if (decompressed_size != expected_decompressed_size)
-			{
-				std::cout << addr.toString() << " - Decompressed size mismatch (got " << decompressed_size << ", expected " << expected_decompressed_size << "): " << string::bin2hex(data) << std::endl;
-				return;
-			}
-			data = std::string(buffer, decompressed_size);
-			sr = MemoryRefReader(data);
+			return;
 		}
 
 		//std::cout << addr.toString() << " > " << string::bin2hex(data) << std::endl;
