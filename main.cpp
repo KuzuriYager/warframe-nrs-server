@@ -897,6 +897,9 @@ int main(int argc, const char** argv)
 		case 0x62: // NAT bind for server
 			{
 				MongoId acctId;
+#if USERNAMES
+				std::string NatHash;
+#endif
 				uint32_t local_ip;
 				uint16_t local_port;
 
@@ -905,7 +908,11 @@ int main(int argc, const char** argv)
 					sr.raw(acctId, 12);
 					if (is_u11_or_below(salt))
 					{
-						sr.skip(64); // NatHash
+#if USERNAMES
+						sr.str(64, NatHash);
+#else
+						sr.skip(64);
+#endif
 					}
 					sr.u32_be(local_ip);
 					sr.u16_le(local_port);
@@ -927,7 +934,13 @@ int main(int argc, const char** argv)
 						std::cout << addr.toString() << " - Malformed packet: " << string::bin2hex(data) << std::endl;
 						return;
 					}
-					sr.skip(128); // NatHash
+#if USERNAMES
+					std::string NatHash_hex;
+					sr.str(128, NatHash_hex);
+					NatHash = string::hex2bin(NatHash_hex);
+#else
+					sr.skip(128);
+#endif
 					SOUP_IF_UNLIKELY (char sep = 0; sr.c(sep), sep != ',')
 					{
 						std::cout << addr.toString() << " - Malformed packet: " << string::bin2hex(data) << std::endl;
@@ -1054,6 +1067,13 @@ int main(int argc, const char** argv)
 #endif
 					}
 #if USERNAMES
+					else if (!NatHash.empty())
+					{
+						if (NatHash.substr(0, 4) == "OWF1" && NatHash.back() == '\0')
+						{
+							data->username = NatHash.c_str() + 4;
+						}
+					}
 					else if (data->presence.find("\"hid\":\"" + acctId.toString()) != std::string::npos)
 					{
 						for (const uint16_t& port : PORTS)
