@@ -212,7 +212,7 @@ static std::string packData(const std::string& data, const std::string_view& sal
 	SOUP_MOVE_RETURN(sw.data);
 }
 
-static bool unpackData(const SocketAddr& addr, MemoryRefReader& sr, std::string& data)
+static bool unpackData(const SocketAddr& addr, MemoryRefReader& sr, std::string& data, bool for_proxy)
 {
 	uint8_t unk_byte;
 	sr.u8(unk_byte);
@@ -234,7 +234,10 @@ static bool unpackData(const SocketAddr& addr, MemoryRefReader& sr, std::string&
 		const auto decompressed_size = lzf::decompress(data.data() + sr.getPosition(), data.size() - sr.getPosition(), buffer, sizeof(buffer));
 		if (decompressed_size != expected_decompressed_size)
 		{
-			std::cout << addr.toString() << " - Decompressed size mismatch (got " << decompressed_size << ", expected " << expected_decompressed_size << "): " << string::bin2hex(data) << std::endl;
+			if (!for_proxy)
+			{
+				std::cout << addr.toString() << " - Decompressed size mismatch (got " << decompressed_size << ", expected " << expected_decompressed_size << "): " << string::bin2hex(data) << std::endl;
+			}
 			return false;
 		}
 		data = std::string(buffer, decompressed_size);
@@ -496,7 +499,7 @@ struct Proxy : public ServerServiceUdp
 		SOUP_IF_UNLIKELY (left_port == 0 || right_port == 0) // Setup phase?
 		{
 			MemoryRefReader sr(data);
-			SOUP_IF_UNLIKELY (!unpackData(addr, sr, data))
+			SOUP_IF_UNLIKELY (!unpackData(addr, sr, data, true))
 			{
 				return;
 			}
@@ -678,7 +681,7 @@ int main(int argc, const char** argv)
 #endif
 
 		MemoryRefReader sr(data);
-		SOUP_IF_UNLIKELY (!unpackData(addr, sr, data))
+		SOUP_IF_UNLIKELY (!unpackData(addr, sr, data, false))
 		{
 			return;
 		}
