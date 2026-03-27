@@ -11,8 +11,6 @@
 #define BANISH_U41_1_TO_SHADOW_REALM false
 #define BANISH_U42_TO_SHADOW_REALM DEPLOYMENT
 
-#define IS_LAN_DEPLOYMENT !DEPLOYMENT
-
 #define MAX_PROXY_CONNECTIONS 100
 #define PROXYING_FOR_LEGACY true
 #define FORCE_PROXY_CONNECTIONS false
@@ -1820,7 +1818,11 @@ int main(int argc, const char** argv)
 	for (const auto& ad : netAdaptor::getAll())
 	{
 		//if (auto info = dhcp::requestInfo(ad.ip_addr); info.isValid())
+#if SOUP_WINDOWS
 		if (ad.name.find("Virtual") == std::string::npos)
+#else
+		if (ad.name != "lo")
+#endif
 		{
 			bind_addr = ad.ip_addr;
 			std::cout << "Using " << ad.name << " (" << bind_addr.toString() << ")" << std::endl;
