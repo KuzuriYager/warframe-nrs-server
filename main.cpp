@@ -601,25 +601,38 @@ struct Proxy : public ServerServiceUdp
 			{
 				return;
 			}
-			if (data.find((const char*)left_id.ints, 0, 12) != std::string::npos)
+			auto left_id_pos = data.find((const char*)left_id.ints, 0, 12);
+			if (left_id_pos == std::string::npos)
+			{
+				left_id_pos = data.find(left_id.toString());
+			}
+			auto right_id_pos = data.find((const char*)right_id.ints, 0, 12);
+			if (right_id_pos == std::string::npos)
+			{
+				right_id_pos = data.find(right_id.toString());
+			}
+			if (left_id_pos != std::string::npos && right_id_pos != std::string::npos)
+			{
+				if (left_id_pos < right_id_pos)
+				{
+					left_ip = addr.ip.getV4();
+					left_port = addr.port;
+					std::cout << addr.toString() << " - " << left_id.toString() << " on proxy port " << Endianness::toNative(port) << std::endl;
+				}
+				else
+				{
+					right_ip = addr.ip.getV4();
+					right_port = addr.port;
+					std::cout << addr.toString() << " - " << right_id.toString() << " on proxy port " << Endianness::toNative(port) << std::endl;
+				}
+			}
+			else if (left_id_pos != std::string::npos)
 			{
 				left_ip = addr.ip.getV4();
 				left_port = addr.port;
 				std::cout << addr.toString() << " - " << left_id.toString() << " on proxy port " << Endianness::toNative(port) << std::endl;
 			}
-			else if (data.find((const char*)right_id.ints, 0, 12) != std::string::npos)
-			{
-				right_ip = addr.ip.getV4();
-				right_port = addr.port;
-				std::cout << addr.toString() << " - " << right_id.toString() << " on proxy port " << Endianness::toNative(port) << std::endl;
-			}
-			else if (data.find(left_id.toString()) != std::string::npos)
-			{
-				left_ip = addr.ip.getV4();
-				left_port = addr.port;
-				std::cout << addr.toString() << " - " << left_id.toString() << " on proxy port " << Endianness::toNative(port) << std::endl;
-			}
-			else if (data.find(right_id.toString()) != std::string::npos)
+			else if (right_id_pos != std::string::npos)
 			{
 				right_ip = addr.ip.getV4();
 				right_port = addr.port;
@@ -631,7 +644,27 @@ struct Proxy : public ServerServiceUdp
 			}
 			else
 			{
-				std::cout << addr.toString() << " - Unexpected traffic on proxy port " << Endianness::toNative(port) << ": " << string::bin2hex(data) << std::endl;
+#if PROXYING_FOR_LEGACY
+				if (left_port != 0 || right_port != 0)
+				{
+					if (left_port == 0)
+					{
+						left_ip = addr.ip.getV4();
+						left_port = addr.port;
+						std::cout << addr.toString() << " - Assuming that's " << left_id.toString() << " on proxy port " << Endianness::toNative(port) << std::endl;
+					}
+					else
+					{
+						right_ip = addr.ip.getV4();
+						right_port = addr.port;
+						std::cout << addr.toString() << " - Assuming that's " << right_id.toString() << " on proxy port " << Endianness::toNative(port) << std::endl;
+					}
+				}
+				else
+#endif
+				{
+					std::cout << addr.toString() << " - Unexpected traffic on proxy port " << Endianness::toNative(port) << ": " << string::bin2hex(data) << std::endl;
+				}
 			}
 			if (left_port == 0 || right_port == 0) // Still setup phase?
 			{
