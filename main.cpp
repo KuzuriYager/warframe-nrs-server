@@ -244,18 +244,20 @@ static bool unpackData(const SocketAddr& addr, MemoryRefReader& sr, std::string&
 }
 
 template <typename T>
-static void ser_str(T& s, const std::string_view& salt, std::string& str)
+static bool ser_str(T& s, const std::string_view& salt, std::string& str)
 {
+	uint32_t len = str.size();
 	if (is_u35_or_below(salt))
 	{
-		s.template str_lp<u32_le_t>(str);
+		s.u32_le(len);
 	}
 	else
 	{
-		uint32_t len = str.size();
 		s.oml(len);
-		s.str(len, str);
 	}
+	SOUP_RETHROW_FALSE(len <= 1024);
+	s.str(len, str);
+	return true;
 }
 
 struct MongoId
