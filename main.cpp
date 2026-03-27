@@ -1855,12 +1855,22 @@ int main(int argc, const char** argv)
 						{
 							e->second.sendSocialChange(s, type, json);
 							std::cout << addr.toString() << "#" << acctId.toString() << " - Sent social change " << (int)type << " " << json << " to " << SocketAddr(e->second.reflexive_ip, e->second.reflexive_port_client).toString() << "#" << target.toString() << std::endl;
+							continue;
 						}
-						else
-						{
-							erase_account(e);
-						}
+						erase_account(e);
 					}
+#if MULTI_NRS
+					if (auto e = remote_account_map.find(target); e != remote_account_map.end())
+					{
+						StringWriter sw;
+						sw.u8(packet_id);
+						target.io(sw);
+						sw.u8(type);
+						sw.str_lp_u64_dyn_b(json);
+						send_custom_message(e->second, std::move(sw.data));
+						std::cout << addr.toString() << "#" << acctId.toString() << " - Sent social change " << (int)type << " " << json << " to " << target.toString() << " on binding server " << (int)e->second << std::endl;
+					}
+#endif
 				}
 			}
 			else
@@ -1898,12 +1908,21 @@ int main(int argc, const char** argv)
 						{
 							e->second.sendFriendRefresh(s, unk);
 							std::cout << addr.toString() << "#" << acctId.toString() << " - Sent friend request refresh " << (int)unk << " to " << SocketAddr(e->second.reflexive_ip, e->second.reflexive_port_client).toString() << "#" << target.toString() << std::endl;
+							continue;
 						}
-						else
-						{
-							erase_account(e);
-						}
+						erase_account(e);
 					}
+#if MULTI_NRS
+					if (auto e = remote_account_map.find(target); e != remote_account_map.end())
+					{
+						StringWriter sw;
+						sw.u8(packet_id);
+						target.io(sw);
+						sw.u8(unk);
+						send_custom_message(e->second, std::move(sw.data));
+						std::cout << addr.toString() << "#" << acctId.toString() << " - Sent friend request refresh " << (int)unk << " to " << target.toString() << " on binding server " << (int)e->second << std::endl;
+					}
+#endif
 				}
 			}
 			else
@@ -2160,6 +2179,29 @@ int main(int argc, const char** argv)
 							}
 						}
 						break;*/
+
+					case 0x6a:
+						{
+							MongoId target; target.io(sr);
+							uint8_t type; sr.u8(type);
+							std::string json; sr.str_lp_u64_dyn_b(json);
+							if (auto e = account_map.find(target); e != account_map.end())
+							{
+								e->second.sendSocialChange(s, type, json);
+							}
+						}
+						break;
+
+					case 0x73:
+						{
+							MongoId target; target.io(sr);
+							uint8_t unk; sr.u8(unk);
+							if (auto e = account_map.find(target); e != account_map.end())
+							{
+								e->second.sendFriendRefresh(s, unk);
+							}
+						}
+						break;
 					}
 				}
 			}
