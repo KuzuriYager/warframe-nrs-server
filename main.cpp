@@ -290,9 +290,10 @@ struct MongoId
 		return memcmp(ints, b.ints, 12) == 0;
 	}
 
-	operator void*() noexcept
+	template <typename T>
+	bool io(T& s)
 	{
-		return ints;
+		return s.raw(ints, 12);
 	}
 
 	std::string toString() const noexcept
@@ -354,14 +355,14 @@ struct AccountData
 	{
 		StringWriter sw;
 		{ uint8_t b = 0x7c /* 31 << 2 */; sw.u8(b); }
-		sw.raw(const_cast<MongoId&>(inviter_acctId), 12);
+		const_cast<MongoId&>(inviter_acctId).io(sw);
 		if (!is_u15_or_below(salt))
 		{
 			if (!is_u15_14_or_below(salt))
 			{
 				sw.u8(bindingServerId);
 			}
-			sw.raw(const_cast<MongoId&>(invitee_acctId), 12);
+			const_cast<MongoId&>(invitee_acctId).io(sw);
 		}
 		sw.u8(presence_state);
 		ser_str(sw, this->salt, const_cast<std::string&>(session_info));
@@ -433,8 +434,8 @@ static void send_introduction(Socket& s, const MongoId& from_acctId, const Mongo
 			port ^= 0xAAAA;
 
 			{ uint8_t b = it; sw.u8(b); }
-			sw.raw(const_cast<MongoId&>(from_acctId), 12);
-			sw.raw(const_cast<MongoId&>(to_acctId), 12);
+			const_cast<MongoId&>(from_acctId).io(sw);
+			const_cast<MongoId&>(to_acctId).io(sw);
 			sw.u32_be(ip);
 			sw.u16_le(port);
 		}
@@ -789,7 +790,7 @@ int main(int argc, const char** argv)
 
 				if (!is_u10_or_below(salt)) // >= U11
 				{
-					sr.raw(acctId, 12);
+					acctId.io(sr);
 					if (!is_u27_or_below(salt)) // >= U28
 					{
 						sr.u64_le(timestamp);
@@ -865,7 +866,7 @@ int main(int argc, const char** argv)
 							{ uint8_t bindingServerId = 0; sw.u8(bindingServerId); }
 						}
 						sw.u8(packet_id);
-						sw.raw(acctId, 12);
+						acctId.io(sw);
 						if (!is_u27_or_below(salt))
 						{
 							sw.u64_le(timestamp);
@@ -913,7 +914,7 @@ int main(int argc, const char** argv)
 
 				if (!is_u10_or_below(salt)) // >= U11
 				{
-					sr.raw(acctId, 12);
+					acctId.io(sr);
 					if (is_u11_or_below(salt))
 					{
 #if USERNAMES
@@ -1087,7 +1088,7 @@ int main(int argc, const char** argv)
 						for (const uint16_t& port : PORTS)
 						{
 							MongoId sender;
-							memset(sender, 0x33, 12);
+							memset(sender.ints, 0x33, 12);
 							send_introduction(s, sender, acctId, SocketAddr(this_machine_ip, (native_u16_t)port), SocketAddr(data->reflexive_ip, data->reflexive_port_server), IT_FROM_PEER, 69, salt, is_dtls);
 							break;
 						}
@@ -1102,7 +1103,7 @@ int main(int argc, const char** argv)
 				MongoId acctId;
 				if (!is_u10_or_below(salt)) // >= U11
 				{
-					sr.raw(acctId, 12);
+					acctId.io(sr);
 					if (is_u11_or_below(salt))
 					{
 						// NatHash
@@ -1138,7 +1139,7 @@ int main(int argc, const char** argv)
 			if (!is_u10_or_below(salt)) // >= U11
 			{
 				MongoId acctId;
-				sr.raw(acctId, 12);
+				acctId.io(sr);
 				if (is_u11_or_below(salt))
 				{
 					sr.skip(64); // NatHash
@@ -1164,8 +1165,8 @@ int main(int argc, const char** argv)
 				while (num_queries--)
 				{
 					MongoId query;
-					sr.raw(query, 12);
-					sw.raw(query, 12);
+					query.io(sr);
+					query.io(sw);
 					if (auto e = account_map.find(query); e != account_map.end())
 					{
 						if (e->second.isActive())
@@ -1216,7 +1217,7 @@ int main(int argc, const char** argv)
 			{
 #if ENABLE_SHADOW_REALM
 				MongoId acctId;
-				sr.raw(acctId, 12);
+				acctId.io(sr);
 				if (auto e = account_map.find(acctId); e != account_map.end())
 				{
 					if (e->second.in_shadow_realm)
@@ -1235,7 +1236,7 @@ int main(int argc, const char** argv)
 				sr.u8(task_id);
 				sr.skip(1); // num queries?
 				MongoId query;
-				sr.raw(query, 12);
+				query.io(sr);
 				if (sr.hasMore())
 				{
 					std::cout << addr.toString() << " - Query addresses but there's more: " << string::bin2hex(data) << std::endl;
@@ -1249,7 +1250,7 @@ int main(int argc, const char** argv)
 						{ uint8_t b = 0x68; sw.u8(b); }
 						sw.u8(task_id);
 						{ uint8_t b = 1; sw.u8(b); } // num results
-						sw.raw(query, 12); // result 0 account id
+						query.io(sw); // result 0 account id
 						if (!is_u32_or_below(salt))
 						{
 							{ uint8_t b = 0x81; sw.u8(b); } // result 0 bitflags
@@ -1387,13 +1388,13 @@ int main(int argc, const char** argv)
 
 				if (!is_u10_or_below(salt)) // >= U11
 				{
-					sr.raw(acctId, 12);
+					acctId.io(sr);
 					if (is_u11_or_below(salt))
 					{
 						sr.skip(64); // NatHash
 					}
 					sr.u8(task_id);
-					sr.raw(target, 12);
+					target.io(sr);
 					if (sr.hasMore())
 					{
 						std::cout << addr.toString() << " - Introduction request but there's more: " << string::bin2hex(data) << std::endl;
@@ -1493,11 +1494,11 @@ int main(int argc, const char** argv)
 			if (!is_u15_or_below(salt)) // >= U15.14
 			{
 				MongoId acctId;
-				sr.raw(acctId, 12);
+				acctId.io(sr);
 				uint8_t task_id;
 				sr.u8(task_id);
 				MongoId target;
-				sr.raw(target, 12);
+				target.io(sr);
 				if (sr.hasMore())
 				{
 					std::cout << addr.toString() << " - Proxy request but there's more: " << string::bin2hex(data) << std::endl;
@@ -1532,7 +1533,7 @@ int main(int argc, const char** argv)
 			if (!is_u10_or_below(salt)) // >= U11 (it is unclear if U11 actually uses this packet because I can't find a way to actually send an invite...)
 			{
 				MongoId acctId;
-				sr.raw(acctId, 12);
+				acctId.io(sr);
 				if (is_u11_or_below(salt))
 				{
 					sr.skip(64); // NatHash
@@ -1543,7 +1544,7 @@ int main(int argc, const char** argv)
 					sr.u8(bindingServerId);
 				}
 				MongoId target;
-				sr.raw(target, 12);
+				target.io(sr);
 				uint8_t presence_state;
 				sr.u8(presence_state);
 				std::string session_info;
@@ -1594,8 +1595,8 @@ int main(int argc, const char** argv)
 					// Send game invite response with status 0 for offline
 					StringWriter sw;
 					{ uint8_t b = 0xa4; sw.u8(b); }
-					sw.raw(acctId, 12);
-					sw.raw(target, 12);
+					acctId.io(sw);
+					target.io(sw);
 					uint8_t status = 0;
 					sw.u8(status);
 					udp_send(s, addr, packData(sw.data, salt), is_dtls);
@@ -1612,7 +1613,7 @@ int main(int argc, const char** argv)
 			if (!is_u15_14_or_below(salt))
 			{
 				MongoId acctId;
-				sr.raw(acctId, 12);
+				acctId.io(sr);
 #if ENABLE_SHADOW_REALM
 				if (auto e = account_map.find(acctId); e != account_map.end())
 				{
@@ -1623,7 +1624,7 @@ int main(int argc, const char** argv)
 				}
 #endif
 				MongoId target;
-				sr.raw(target, 12);
+				target.io(sr);
 				uint8_t status; // 1 = received. 3 = declined. 4 = failed to join.
 				sr.u8(status);
 				if (sr.hasMore())
@@ -1636,8 +1637,8 @@ int main(int argc, const char** argv)
 					{
 						StringWriter sw;
 						{ uint8_t b = 0xa4; sw.u8(b); }
-						sw.raw(target, 12);
-						sw.raw(acctId, 12);
+						target.io(sw);
+						acctId.io(sw);
 						sw.u8(status);
 						udp_send(s, SocketAddr(e->second.reflexive_ip, e->second.reflexive_port_server), packData(sw.data, e->second.salt), e->second.is_dtls);
 					}
@@ -1656,12 +1657,12 @@ int main(int argc, const char** argv)
 		case 0x6a: // Send social change (when accepting a friend request or removing a friend in U39 and below; done via IRC nowadays)
 			if (!is_u11_or_below(salt))
 			{
-				MongoId acctId; sr.raw(acctId, 12);
+				MongoId acctId; acctId.io(sr);
 				uint8_t type; sr.u8(type); // 29 = accept friend request, 30 = remove friend
 				uint8_t num_changes = 0; sr.u8(num_changes);
 				while (num_changes--)
 				{
-					MongoId target; sr.raw(target, 12);
+					MongoId target; target.io(sr);
 					std::string json; ser_str(sr, salt, json);
 					if (auto e = account_map.find(target); e != account_map.end())
 					{
@@ -1691,7 +1692,7 @@ int main(int argc, const char** argv)
 				uint8_t unk = 0x05;
 				uint8_t num_targets = 1;
 
-				sr.raw(acctId, 12);
+				acctId.io(sr);
 				if (is_u11_or_below(salt))
 				{
 					sr.skip(64); // NatHash
@@ -1704,7 +1705,7 @@ int main(int argc, const char** argv)
 
 				while (num_targets--)
 				{
-					MongoId target; sr.raw(target, 12);
+					MongoId target; target.io(sr);
 					// In U11, the target account id seems to be followed by 0x05 instead of 0x09
 					if (auto e = account_map.find(target); e != account_map.end())
 					{
