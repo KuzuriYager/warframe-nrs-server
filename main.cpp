@@ -46,6 +46,8 @@
 #include <netInfo.hpp>
 #if JITTER
 #include <os.hpp>
+#endif
+#if MAX_PROXY_CONNECTIONS > 0 || JITTER
 #include <rand.hpp>
 #endif
 #include <Server.hpp>
@@ -720,6 +722,7 @@ static network_u16_t setup_proxying(const MongoId& left_id, bool left_is_server,
 	{
 		return 0;
 	}
+	size_t num_free_proxies = 0;
 	Proxy* free_proxy = nullptr;
 	for (auto& proxy : proxies)
 	{
@@ -728,9 +731,13 @@ static network_u16_t setup_proxying(const MongoId& left_id, bool left_is_server,
 			proxy.last_traffic = time::unixSeconds();
 			return proxy.port;
 		}
-		if (free_proxy == nullptr && !proxy.isActive())
+		if (!proxy.isActive())
 		{
-			free_proxy = &proxy;
+			++num_free_proxies;
+			if (free_proxy == nullptr || soup::rand.one_in(num_free_proxies))
+			{
+				free_proxy = &proxy;
+			}
 		}
 	}
 	if (free_proxy)
