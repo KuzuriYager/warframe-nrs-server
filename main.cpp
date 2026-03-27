@@ -1261,10 +1261,12 @@ int main(int argc, const char** argv)
 				sr.u8(num_queries);
 
 #if ENABLE_SHADOW_REALM
-				bool in_shadow_realm;
+				if (auto e = account_map.find(acctId); e != account_map.end())
 				{
-					auto e = account_map.find(acctId);
-					in_shadow_realm = e != account_map.end() && e->second.in_shadow_realm;
+					if (e->second.in_shadow_realm)
+					{
+						break;
+					}
 				}
 #endif
 
@@ -1282,22 +1284,14 @@ int main(int argc, const char** argv)
 					{
 						if (e->second.isActive())
 						{
-#if ENABLE_SHADOW_REALM
-							if (!in_shadow_realm)
-#endif
+							sw.u8(e->second.status);
+							if (packet_id == 0x50)
 							{
-								sw.u8(e->second.status);
-								if (packet_id == 0x50)
-								{
-									ser_str(sw, salt, e->second.presence);
-								}
-								continue;
+								ser_str(sw, salt, e->second.presence);
 							}
+							continue;
 						}
-						else
-						{
-							erase_account(e);
-						}
+						erase_account(e);
 					}
 #if MULTI_NRS
 					if (auto e = remote_account_map.find(query); e != remote_account_map.end())
