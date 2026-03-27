@@ -860,16 +860,18 @@ int main(int argc, const char** argv)
 			}
 		}
 		//std::cout << addr.toString() << " - salt = " << salt << std::endl;
+
+		uint8_t packet_id;
+		sr.u8(packet_id);
+
 #if DEPLOYMENT
-		if (!is_dtls && !is_u32_or_below(salt))
+		if (!is_dtls && !is_u32_or_below(salt) && packet_id != 0)
 		{
 			std::cout << addr.toString() << " - Ignoring cleartext traffic from a post-DTLS version: " << string::bin2hex(data) << std::endl;
 			return;
 		}
 #endif
 
-		uint8_t packet_id;
-		sr.u8(packet_id);
 		switch (packet_id)
 		{
 		case 0x54: // Test from client
