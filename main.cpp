@@ -1,10 +1,12 @@
 #include <iostream>
 #include <unordered_map>
 
-#if DEPLOYMENT
-	#define PORTS { 4950, 3960 }
-#else
-	#define PORTS { 1234 }
+#ifndef PORTS
+	#if DEPLOYMENT
+		#define PORTS { 4950, 3960 }
+	#else
+		#define PORTS { 1234 }
+	#endif
 #endif
 
 #define ENABLE_SHADOW_REALM DEPLOYMENT
@@ -18,6 +20,13 @@
 #define ENABLE_HTTP true
 
 #define USERNAMES true
+
+#define MULTI_NRS false
+#define SERVERS { /* Same array as "NRS" in login response */ }
+#ifndef THIS_SERVER_ID
+	#define THIS_SERVER_ID 0
+#endif
+#define JITTER false
 
 #include <crc32.hpp>
 #include <crc32c.hpp>
@@ -35,6 +44,10 @@
 #include <netAdaptor.hpp>
 #endif
 #include <netInfo.hpp>
+#if JITTER
+#include <os.hpp>
+#include <rand.hpp>
+#endif
 #include <Server.hpp>
 #include <ServerServiceUdp.hpp>
 #if ENABLE_HTTP
@@ -354,7 +367,7 @@ struct AccountData
 		return time::unixSecondsSince(last_nat_bind) <= 120;
 	}
 
-	void sendGameInvite(Socket& s, const MongoId& inviter_acctId, const MongoId& invitee_acctId, const std::string& session_info, const std::string& inviter_name, uint8_t bindingServerId = 0, uint8_t presence_state = 3)
+	void sendGameInvite(Socket& s, const MongoId& inviter_acctId, const MongoId& invitee_acctId, const std::string& session_info, const std::string& inviter_name, uint8_t presence_state = 3, uint8_t bindingServerId = THIS_SERVER_ID)
 	{
 		StringWriter sw;
 		{ uint8_t b = 0x7c /* 31 << 2 */; sw.u8(b); }
@@ -399,6 +412,91 @@ struct AccountData
 };
 static std::unordered_map<MongoId, AccountData> account_map;
 
+#if ENABLE_HTTP || MULTI_NRS
+static SharedPtr<Socket> nrs_socket;
+#endif
+
+#if MULTI_NRS
+static std::unordered_map<MongoId, uint8_t> remote_account_map; // <account id, binding server id>
+
+static std::vector<SocketAddr> get_servers_impl()
+{
+	const std::vector<const char*> strs = SERVERS;
+	std::vector<SocketAddr> addrs;
+	addrs.reserve(strs.size());
+	for (uint8_t i = 0; i != strs.size(); ++i)
+	{
+		addrs.emplace_back().fromString(strs[i]);
+	}
+	return addrs;
+}
+
+static const std::vector<SocketAddr>& get_servers()
+{
+	static const std::vector<SocketAddr> servers = get_servers_impl();
+	return servers;
+}
+
+static void pack_custom_message(std::string& msg)
+{
+	msg.insert(0, 1, THIS_SERVER_ID);
+	msg.insert(0, 1, '\1'); // NRS-to-NRS message
+	msg.insert(0, 5, '\0'); // compression + checksum
+	const std::string_view salt = "b471e49539930dc9b5a131e6247c7387A";
+	const auto initial = crc32::hash((const uint8_t*)msg.data() + 5, msg.size() - 5, 0);
+	*(uint32_t*)(msg.data() + 1) = Endianness::toNetwork(crc32::hash((const uint8_t*)salt.data(), salt.size(), initial));
+}
+
+static void send_custom_message(uint8_t bindingServerId, std::string&& msg)
+{
+	pack_custom_message(msg);
+	if (nrs_socket)
+	{
+		nrs_socket->udpServerSend(get_servers()[bindingServerId], msg);
+	}
+	else
+	{
+		Socket s;
+		s.udpClientSend(get_servers()[bindingServerId], msg);
+	}
+}
+
+static void broadcast_custom_message(std::string&& msg)
+{
+	pack_custom_message(msg);
+	const std::vector<SocketAddr>& servers = get_servers();
+	if (nrs_socket)
+	{
+		for (uint8_t i = 0; i != servers.size(); ++i)
+		{
+			if (i != THIS_SERVER_ID)
+			{
+				nrs_socket->udpServerSend(servers[i], msg);
+			}
+		}
+	}
+	else
+	{
+		Socket s;
+		for (uint8_t i = 0; i != servers.size(); ++i)
+		{
+			if (i != THIS_SERVER_ID)
+			{
+				s.udpClientSend(servers[i], msg);
+			}
+		}
+	}
+}
+#endif
+
+static std::unordered_map<MongoId, AccountData>::iterator erase_account(std::unordered_map<MongoId, AccountData>::iterator it)
+{
+#if MULTI_NRS
+	broadcast_custom_message("-" + std::string((const char*)it->first.ints, 12));
+#endif
+	return account_map.erase(it);
+}
+
 static void collect_garbage()
 {
 	for (auto it = account_map.begin(); it != account_map.end(); )
@@ -409,7 +507,7 @@ static void collect_garbage()
 		}
 		else
 		{
-			it = account_map.erase(it);
+			it = erase_account(it);
 		}
 	}
 }
@@ -621,10 +719,6 @@ static network_u16_t setup_proxying(const MongoId& left_id, bool left_is_server,
 }
 #endif
 
-#if ENABLE_HTTP
-static SharedPtr<Socket> nrs_socket;
-#endif
-
 int main(int argc, const char** argv)
 {
 #if USE_DTLSBRIDGE
@@ -635,7 +729,7 @@ int main(int argc, const char** argv)
 
 	ServerServiceUdp srv([](Socket& s, SocketAddr&& addr, std::string&& data, ServerServiceUdp&)
 	{
-#if ENABLE_HTTP
+#if ENABLE_HTTP || MULTI_NRS
 		if (!nrs_socket)
 		{
 			nrs_socket = Scheduler::get()->getShared(s);
@@ -866,7 +960,8 @@ int main(int argc, const char** argv)
 					{
 						if (!is_u15_14_or_below(salt))
 						{
-							{ uint8_t bindingServerId = 0; sw.u8(bindingServerId); }
+							uint8_t bindingServerId = THIS_SERVER_ID;
+							sw.u8(bindingServerId);
 						}
 						sw.u8(packet_id);
 						acctId.io(sw);
@@ -901,6 +996,9 @@ int main(int argc, const char** argv)
 					std::string tmp = addr.toString();
 					ser_str(sw, salt, tmp);
 				}
+#if JITTER
+				os::sleep(soup::rand.t<unsigned int>(0, 100));
+#endif
 				udp_send(s, addr, packData(sw.data, salt), is_dtls);
 			}
 			break;
@@ -932,7 +1030,7 @@ int main(int argc, const char** argv)
 					local_port ^= 0xAAAA;
 					if (!is_u27_or_below(salt))
 					{
-						sr.skip(2); // bindingServerId + numBindingServers maybe?
+						sr.skip(2); // 00 01. Thought it might be related to multiple binding servers, but it's not.
 					}
 				}
 				else // < U11
@@ -976,6 +1074,9 @@ int main(int argc, const char** argv)
 				else
 				{
 					collect_garbage();
+#if MULTI_NRS
+					broadcast_custom_message("+" + std::string((const char*)acctId.ints, 12));
+#endif
 					data = &account_map.emplace(acctId, AccountData{}).first->second;
 				}
 				data->reflexive_ip = reflexive_ip;
@@ -1020,7 +1121,7 @@ int main(int argc, const char** argv)
 #endif
 					}
 
-					//data->sendGameInvite(s, acctId, acctId, R"({})", "Welcome :)", 0, 0);
+					//data->sendGameInvite(s, acctId, acctId, R"({})", "Welcome :)", 0);
 				}
 				else
 				{
@@ -1132,7 +1233,14 @@ int main(int argc, const char** argv)
 					}
 					//sr.skip(128); // NatHash
 				}
+#if MULTI_NRS
+				if (auto e = account_map.find(acctId); e != account_map.end())
+				{
+					erase_account(e);
+				}
+#else
 				account_map.erase(acctId);
+#endif
 				std::cout << addr.toString() << "#" << acctId.toString() << " - Logged out" << std::endl;
 			}
 			break;
@@ -1188,10 +1296,19 @@ int main(int argc, const char** argv)
 						}
 						else
 						{
-							account_map.erase(e);
+							erase_account(e);
 						}
 					}
-					{ uint8_t b = 0; sw.u8(b); }
+#if MULTI_NRS
+					if (auto e = remote_account_map.find(query); e != remote_account_map.end())
+					{
+						uint8_t b = ~e->second; sw.u8(b);
+					}
+					else
+#endif
+					{
+						uint8_t b = 0; sw.u8(b);
+					}
 					if (packet_id == 0x50)
 					{
 						std::string str;
@@ -1218,9 +1335,10 @@ int main(int argc, const char** argv)
 			//std::cout << addr.toString() << " - Request resolve pending punchthroughs" << std::endl;
 			if (!is_u10_or_below(salt)) // >= U11
 			{
-#if ENABLE_SHADOW_REALM
+#if ENABLE_SHADOW_REALM || MULTI_NRS
 				MongoId acctId;
 				acctId.io(sr);
+	#if ENABLE_SHADOW_REALM
 				if (auto e = account_map.find(acctId); e != account_map.end())
 				{
 					if (e->second.in_shadow_realm)
@@ -1228,6 +1346,7 @@ int main(int argc, const char** argv)
 						break;
 					}
 				}
+	#endif
 #else
 				sr.skip(12); // acctId
 #endif
@@ -1290,9 +1409,37 @@ int main(int argc, const char** argv)
 					}
 					else
 					{
-						account_map.erase(e);
+						erase_account(e);
 					}
 				}
+#if MULTI_NRS
+				if (auto e = remote_account_map.find(query); e != remote_account_map.end())
+				{
+					if (!is_u32_or_below(salt))
+					{
+						StringWriter sw;
+						sw.u8(packet_id);
+
+						acctId.io(sw);
+						{ network_u32_t reply_ip = addr.ip.getV4(); sw.u32_le(reply_ip); }
+						{ network_u16_t reply_port = addr.port; sw.u16_le(reply_port); }
+
+						sw.u8(task_id);
+						query.io(sw);
+						send_custom_message(e->second, std::move(sw.data));
+					}
+					else
+					{
+						StringWriter sw;
+						{ uint8_t b = 0x68; sw.u8(b); }
+						sw.u8(task_id);
+						{ uint8_t b = 1; sw.u8(b); } // num results
+						query.io(sw); // result 0 account id
+						uint8_t redirect = ~e->second; sw.u8(redirect);
+						udp_send(s, addr, packData(sw.data, salt), is_dtls);
+					}
+				}
+#endif
 			}
 			else
 			{
@@ -1363,7 +1510,7 @@ int main(int argc, const char** argv)
 							res.push_back(',');
 							continue;
 						}
-						account_map.erase(e);
+						erase_account(e);
 					}
 					res.append(",0,0,");
 				}
@@ -1486,7 +1633,7 @@ int main(int argc, const char** argv)
 					}
 					else
 					{
-						account_map.erase(e);
+						erase_account(e);
 					}
 				}
 			}
@@ -1520,7 +1667,7 @@ int main(int argc, const char** argv)
 					}
 					else
 					{
-						account_map.erase(e);
+						erase_account(e);
 					}
 				}
 			}
@@ -1541,10 +1688,14 @@ int main(int argc, const char** argv)
 				{
 					sr.skip(64); // NatHash
 				}
-				uint8_t bindingServerId = 0;
+				uint8_t bindingServerId = THIS_SERVER_ID;
 				if (!is_u15_14_or_below(salt))
 				{
 					sr.u8(bindingServerId);
+				}
+				if (bindingServerId != THIS_SERVER_ID)
+				{
+					std::cout << addr.toString() << " - Game invite expected bindingServerId " << THIS_SERVER_ID << " but got " << (int)bindingServerId << std::endl;
 				}
 				MongoId target;
 				target.io(sr);
@@ -1588,11 +1739,25 @@ int main(int argc, const char** argv)
 				{
 					if (e->second.isActive())
 					{
-						e->second.sendGameInvite(s, acctId, target, session_info, inviter_name, bindingServerId, presence_state);
+						e->second.sendGameInvite(s, acctId, target, session_info, inviter_name, presence_state);
 						break;
 					}
-					account_map.erase(e);
+					erase_account(e);
 				}
+#if MULTI_NRS
+				if (auto e = remote_account_map.find(target); e != remote_account_map.end())
+				{
+					StringWriter sw;
+					{ char c = 'i'; sw.c(c); }
+					acctId.io(sw);
+					target.io(sw);
+					sw.str_lp_u64_dyn_b(session_info);
+					sw.str_lp_u64_dyn_b(inviter_name);
+					sw.u8(presence_state);
+					send_custom_message(e->second, std::move(sw.data));
+				}
+				else
+#endif
 				if (!is_u15_14_or_below(salt)) // Invite responses were introduced some time after U15.14
 				{
 					// Send game invite response with status 0 for offline
@@ -1644,12 +1809,21 @@ int main(int argc, const char** argv)
 						acctId.io(sw);
 						sw.u8(status);
 						udp_send(s, SocketAddr(e->second.reflexive_ip, e->second.reflexive_port_server), packData(sw.data, e->second.salt), e->second.is_dtls);
+						break;
 					}
-					else
-					{
-						account_map.erase(e);
-					}
+					erase_account(e);
 				}
+#if MULTI_NRS
+				/*if (auto e = remote_account_map.find(target); e != remote_account_map.end())
+				{
+					StringWriter sw;
+					{ char c = 'I'; sw.c(c); }
+					acctId.io(sw);
+					target.io(sw);
+					sw.u8(status);
+					send_custom_message(e->second, std::move(sw.data));
+				}*/
+#endif
 			}
 			else
 			{
@@ -1676,7 +1850,7 @@ int main(int argc, const char** argv)
 						}
 						else
 						{
-							account_map.erase(e);
+							erase_account(e);
 						}
 					}
 				}
@@ -1719,7 +1893,7 @@ int main(int argc, const char** argv)
 						}
 						else
 						{
-							account_map.erase(e);
+							erase_account(e);
 						}
 					}
 				}
@@ -1805,13 +1979,170 @@ int main(int argc, const char** argv)
 							}
 							else
 							{
-								account_map.erase(e);
+								erase_account(e);
 							}
 						}
 					}
 				}
 			}
 			break;
+
+#if MULTI_NRS
+		case 0x01: // Custom NRS-to-NRS message
+			{
+				uint8_t bindingServerId = -1;
+				sr.u8(bindingServerId);
+				if (bindingServerId < get_servers().size())
+				{
+					char c; sr.c(c);
+					switch (c)
+					{
+					case '^':
+						{
+							std::cout << addr.toString() << " - Binding server " << (int)bindingServerId << " has (re)started" << std::endl;
+
+							// Remove any accounts we had associated with this binding server
+							for (auto it = remote_account_map.begin(); it != remote_account_map.end(); )
+							{
+								if (it->second == bindingServerId)
+								{
+									it = remote_account_map.erase(it);
+								}
+								else
+								{
+									++it;
+								}
+							}
+
+							// Let this binding server know of our accounts
+							StringWriter sw;
+							{ char c = '+'; sw.c(c); }
+							for (auto it = account_map.begin(); it != account_map.end(); ++it)
+							{
+								const_cast<MongoId&>(it->first).io(sw);
+							}
+							send_custom_message(bindingServerId, std::move(sw.data));
+						}
+						break;
+
+					case '+':
+						for (MongoId id; id.io(sr); )
+						{
+							remote_account_map.emplace(id, bindingServerId);
+							std::cout << addr.toString() << " - " << id.toString() << " registered on binding server " << (int)bindingServerId << std::endl;
+						}
+						break;
+
+					case '-':
+						{
+							MongoId id; id.io(sr);
+							remote_account_map.erase(id);
+							std::cout << addr.toString() << " - " << id.toString() << " unregistered from binding server " << (int)bindingServerId << std::endl;
+						}
+						break;
+
+					case 0x52: // Query client addresses
+					case 0x72: // Query server addresses
+						{
+							MongoId acctId; acctId.io(sr);
+							network_u32_t reply_ip; sr.u32_le(reply_ip);
+							network_u16_t reply_port; sr.u16_le(reply_port);
+							uint8_t task_id; sr.u8(task_id);
+							MongoId query; query.io(sr);
+							//std::cout << addr.toString() << " - Resolving " << query.toString() << " for " << acctId.toString() << std::endl;
+							if (auto e = account_map.find(query); e != account_map.end())
+							{
+								StringWriter sw;
+								{ char c = '>'; sw.c(c); }
+
+								acctId.io(sw);
+								sw.u32_le(reply_ip);
+								sw.u16_le(reply_port);
+
+								{ uint8_t b = 0x68; sw.u8(b); }
+								sw.u8(task_id);
+								{ uint8_t b = 1; sw.u8(b); } // num results
+								query.io(sw); // result 0 account id
+								{ uint8_t redirect = 0x80 | (THIS_SERVER_ID + 1); sw.u8(redirect); }
+								{
+#if FORCE_PROXY_CONNECTIONS
+									uint32_t masked_ip = SOUP_IPV4(10, 0, 0, 0) ^ 0xAAAAAAAA;
+#else
+									uint32_t masked_ip = e->second.reflexive_ip ^ 0xAAAAAAAA;
+#endif
+									sw.u32_be(masked_ip);
+								}
+								{
+									uint16_t masked_port = ((packet_id & 0x20) ? e->second.reflexive_port_server : e->second.reflexive_port_client) ^ 0xAAAA;
+									sw.u16_le(masked_port);
+								}
+								{
+#if FORCE_PROXY_CONNECTIONS
+									uint32_t masked_ip = SOUP_IPV4(10, 0, 0, 0) ^ 0xAAAAAAAA;
+#else
+									uint32_t masked_ip = e->second.local_ip ^ 0xAAAAAAAA;
+#endif
+									sw.u32_be(masked_ip);
+								}
+								{
+									uint16_t masked_port = ((packet_id & 0x20) ? e->second.local_port_server : e->second.local_port_client) ^ 0xAAAA;
+									sw.u16_le(masked_port);
+								}
+								send_custom_message(bindingServerId, std::move(sw.data));
+							}
+						}
+						break;
+
+					case '>':
+						{
+							MongoId acctId; acctId.io(sr);
+							network_u32_t reply_ip; sr.u32_le(reply_ip);
+							network_u16_t reply_port; sr.u16_le(reply_port);
+							if (auto e = account_map.find(acctId); e != account_map.end())
+							{
+								SocketAddr reply_to(reply_ip, reply_port);
+								//std::cout << addr.toString() << " - Forward reply to " << reply_to.toString() << ": " << string::bin2hex(data.substr(sr.getPosition())) << std::endl;
+								udp_send(s, reply_to, packData(data.substr(sr.getPosition()), e->second.salt), e->second.is_dtls);
+							}
+						}
+						break;
+
+					case 'i':
+						{
+							MongoId acctId; acctId.io(sr);
+							MongoId target; target.io(sr);
+							std::string session_info; sr.str_lp_u64_dyn_b(session_info);
+							std::string inviter_name; sr.str_lp_u64_dyn_b(inviter_name);
+							uint8_t presence_state; sr.u8(presence_state);
+							if (auto e = account_map.find(target); e != account_map.end())
+							{
+								//std::cout << addr.toString() << " - Forward game invite from " << acctId.toString() << " to " << target.toString() << std::endl;
+								e->second.sendGameInvite(s, acctId, target, session_info, inviter_name, presence_state, bindingServerId);
+							}
+						}
+						break;
+
+					/*case 'I':
+						{
+							MongoId acctId; acctId.io(sr);
+							MongoId target; target.io(sr);
+							uint8_t status; sr.u8(status);
+							if (auto e = account_map.find(target); e != account_map.end())
+							{
+								StringWriter sw;
+								{ uint8_t b = 0xa4; sw.u8(b); }
+								target.io(sw);
+								acctId.io(sw);
+								sw.u8(status);
+								udp_send(s, SocketAddr(e->second.reflexive_ip, e->second.reflexive_port_server), packData(sw.data, e->second.salt), e->second.is_dtls);
+							}
+						}
+						break;*/
+					}
+				}
+			}
+			break;
+#endif
 
 		default:
 			std::cout << addr.toString() << " - Unknown packet with id " << (int)packet_id << ": " << string::bin2hex(data) << std::endl;
@@ -2045,7 +2376,7 @@ int main(int argc, const char** argv)
 					{
 						if (auto to_e = account_map.find(to_id); to_e != account_map.end())
 						{
-							to_e->second.sendGameInvite(*nrs_socket, from_id, to_id, from_e->second.presence, from_e->second.username, 0, from_e->second.status);
+							to_e->second.sendGameInvite(*nrs_socket, from_id, to_id, from_e->second.presence, from_e->second.username, from_e->second.status);
 							ServerWebService::sendText(s, "true");
 							return;
 						}
@@ -2071,6 +2402,10 @@ int main(int argc, const char** argv)
 			std::cout << "Failed to bind TCP/" << port << " for HTTP" << std::endl;
 		}
 	}
+#endif
+
+#if MULTI_NRS
+	broadcast_custom_message("^");
 #endif
 
 #ifdef DOCKER
