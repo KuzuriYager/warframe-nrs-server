@@ -2435,7 +2435,6 @@ int main(int argc, const char** argv)
 		}
 		else if (req.path.substr(0, 12) == "/api/invite/")
 		{
-#if USERNAMES
 			if (req.path.size() == 12 + 24 + 1 + 24
 				&& nrs_socket
 				)
@@ -2444,11 +2443,18 @@ int main(int argc, const char** argv)
 				MongoId to_id = string::hex2bin(req.path.substr(12 + 24 + 1));
 				if (auto from_e = account_map.find(from_id); from_e != account_map.end())
 				{
-					if (!from_e->second.presence.empty() && !from_e->second.username.empty())
+					if (!from_e->second.presence.empty())
 					{
+						std::string username = from_id.toString();
+#if USERNAMES
+						if (!from_e->second.username.empty())
+						{
+							username = from_e->second.username;
+						}
+#endif
 						if (auto to_e = account_map.find(to_id); to_e != account_map.end())
 						{
-							to_e->second.sendGameInvite(*nrs_socket, from_id, to_id, from_e->second.presence, from_e->second.username, from_e->second.status);
+							to_e->second.sendGameInvite(*nrs_socket, from_id, to_id, from_e->second.presence, username, from_e->second.status);
 							ServerWebService::sendText(s, "true");
 							return;
 						}
@@ -2460,7 +2466,7 @@ int main(int argc, const char** argv)
 							from_id.io(sw);
 							to_id.io(sw);
 							sw.str_lp_u64_dyn_b(from_e->second.presence);
-							sw.str_lp_u64_dyn_b(from_e->second.username);
+							sw.str_lp_u64_dyn_b(username);
 							sw.u8(from_e->second.status);
 							send_custom_message(to_e->second, std::move(sw.data));
 							ServerWebService::sendText(s, "true");
@@ -2477,7 +2483,6 @@ int main(int argc, const char** argv)
 				}
 #endif
 			}
-#endif
 			ServerWebService::sendText(s, "false");
 		}
 		else
