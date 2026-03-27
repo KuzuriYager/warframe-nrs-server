@@ -863,7 +863,7 @@ int main(int argc, const char** argv)
 #if DEPLOYMENT
 		if (!is_dtls && !is_u32_or_below(salt))
 		{
-			std::cout << addr.toString() << " - Cleartext traffic from a post-DTLS version, ignoring" << std::endl;
+			std::cout << addr.toString() << " - Ignoring cleartext traffic from a post-DTLS version: " << string::bin2hex(data) << std::endl;
 			return;
 		}
 #endif
