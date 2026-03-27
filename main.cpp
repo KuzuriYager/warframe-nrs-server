@@ -1647,22 +1647,36 @@ int main(int argc, const char** argv)
 				{
 					std::cout << addr.toString() << " - Proxy request but there's more: " << string::bin2hex(data) << std::endl;
 				}
-				if (auto e = account_map.find(target); e != account_map.end())
+				//std::cout << addr.toString() << " - Proxy request for " << target.toString() << std::endl;
+
+				if (auto proxy_port = setup_proxying(acctId, false, target, true))
 				{
-					if (e->second.isActive())
+					std::cout << addr.toString() << "#" << acctId.toString() << " - Obtained proxy port " << Endianness::toNative(proxy_port) << " to connect to " << target.toString() << std::endl;
+					send_introduction(s, target, acctId, SocketAddr(this_machine_ip, proxy_port), addr, IT_TO_PROXY, task_id, salt, is_dtls);
+					if (auto e = account_map.find(target); e != account_map.end())
 					{
-						SocketAddr to_addr(e->second.reflexive_ip, e->second.reflexive_port_server);
-						if (auto proxy_port = setup_proxying(acctId, false, target, true))
+						if (e->second.isActive())
 						{
-							send_introduction(s, target, acctId, SocketAddr(this_machine_ip, proxy_port), addr, IT_TO_PROXY, task_id, salt, is_dtls);
-							send_introduction(s, acctId, target, SocketAddr(this_machine_ip, proxy_port), to_addr, IT_VIA_PROXY, task_id, e->second.salt, e->second.is_dtls);
-							std::cout << addr.toString() << "#" << acctId.toString() << " - Obtained proxy port " << Endianness::toNative(proxy_port) << " to connect to " << target.toString() << std::endl;
+							send_introduction(s, acctId, target, SocketAddr(this_machine_ip, proxy_port), SocketAddr(e->second.reflexive_ip, e->second.reflexive_port_server), IT_VIA_PROXY, task_id, e->second.salt, e->second.is_dtls);
+							break;
 						}
-					}
-					else
-					{
 						erase_account(e);
 					}
+#if MULTI_NRS
+					if (auto e = remote_account_map.find(target); e != remote_account_map.end())
+					{
+						StringWriter sw;
+						{ char c = 'p'; sw.c(c); }
+						acctId.io(sw);
+						sw.u8(task_id);
+						target.io(sw);
+						sw.u32_le(this_machine_ip);
+						sw.u16_le(proxy_port);
+						send_custom_message(e->second, std::move(sw.data));
+						break;
+					}
+#endif
+					std::cout << addr.toString() << "#" << acctId.toString() << " - Could not deliver proxy introduction to " << target.toString() << std::endl;
 				}
 			}
 			else
@@ -2097,6 +2111,20 @@ int main(int argc, const char** argv)
 								SocketAddr reply_to(reply_ip, reply_port);
 								//std::cout << addr.toString() << " - Forward reply to " << reply_to.toString() << ": " << string::bin2hex(data.substr(sr.getPosition())) << std::endl;
 								udp_send(s, reply_to, packData(data.substr(sr.getPosition()), e->second.salt), e->second.is_dtls);
+							}
+						}
+						break;
+
+					case 'p':
+						{
+							MongoId acctId; acctId.io(sr);
+							uint8_t task_id; sr.u8(task_id);
+							MongoId target; target.io(sr);
+							network_u32_t proxy_ip; sr.u32_le(proxy_ip);
+							network_u16_t proxy_port; sr.u16_le(proxy_port);
+							if (auto e = account_map.find(target); e != account_map.end())
+							{
+								send_introduction(s, acctId, target, SocketAddr(proxy_ip, proxy_port), SocketAddr(e->second.reflexive_ip, e->second.reflexive_port_server), IT_VIA_PROXY, task_id, e->second.salt, e->second.is_dtls);
 							}
 						}
 						break;
