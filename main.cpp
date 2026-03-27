@@ -2366,7 +2366,8 @@ int main(int argc, const char** argv)
 		else if (req.path.substr(0, 13) == "/api/account/")
 		{
 			JsonObject obj;
-			if (auto e = account_map.find(string::hex2bin(req.path.substr(13))); e != account_map.end())
+			const MongoId acctId = string::hex2bin(req.path.substr(13));
+			if (auto e = account_map.find(acctId); e != account_map.end())
 			{
 				if (e->second.isActive())
 				{
@@ -2388,6 +2389,13 @@ int main(int argc, const char** argv)
 #endif
 				}
 			}
+#if MULTI_NRS
+			if (auto e = remote_account_map.find(acctId); e != remote_account_map.end())
+			{
+				ServerWebService::sendRedirect(s, "http://" + get_servers()[e->second].toString() + "/api/account/" + acctId.toString());
+				return;
+			}
+#endif
 			ServerWebService::sendText(s, obj.encodePretty());
 		}
 		else if (req.path.substr(0, 13) == "/api/session/")
