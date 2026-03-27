@@ -2440,11 +2440,11 @@ int main(int argc, const char** argv)
 				&& nrs_socket
 				)
 			{
-				const std::string from_id = string::hex2bin(req.path.substr(12, 24));
-				const std::string to_id = string::hex2bin(req.path.substr(12 + 24 + 1));
+				MongoId from_id = string::hex2bin(req.path.substr(12, 24));
+				MongoId to_id = string::hex2bin(req.path.substr(12 + 24 + 1));
 				if (auto from_e = account_map.find(from_id); from_e != account_map.end())
 				{
-					if (!from_e->second.username.empty())
+					if (!from_e->second.presence.empty() && !from_e->second.username.empty())
 					{
 						if (auto to_e = account_map.find(to_id); to_e != account_map.end())
 						{
@@ -2452,8 +2452,30 @@ int main(int argc, const char** argv)
 							ServerWebService::sendText(s, "true");
 							return;
 						}
+#if MULTI_NRS
+						if (auto to_e = remote_account_map.find(to_id); to_e != remote_account_map.end())
+						{
+							StringWriter sw;
+							{ char c = 'i'; sw.c(c); }
+							from_id.io(sw);
+							to_id.io(sw);
+							sw.str_lp_u64_dyn_b(from_e->second.presence);
+							sw.str_lp_u64_dyn_b(from_e->second.username);
+							sw.u8(from_e->second.status);
+							send_custom_message(to_e->second, std::move(sw.data));
+							ServerWebService::sendText(s, "true");
+							return;
+						}
+#endif
 					}
 				}
+#if MULTI_NRS
+				if (auto e = remote_account_map.find(from_id); e != remote_account_map.end())
+				{
+					ServerWebService::sendRedirect(s, "http://" + get_servers()[e->second].toString() + "/api/invite/" + from_id.toString() + "/" + to_id.toString());
+					return;
+				}
+#endif
 			}
 #endif
 			ServerWebService::sendText(s, "false");
