@@ -167,6 +167,34 @@ static uint64_t md5_checksum(const char* data, size_t size, const std::string_vi
 	return u.chksum64;
 }
 
+static std::string compressPacket(std::string&& data)
+{
+	uint16_t decompressed_size = data.size() - 1;
+	uint8_t buffer[0x1000];
+	if (decompressed_size <= 0x3F)
+	{
+		if (auto compressed_size = lzf::compress(data.data() + 1, data.size() - 1, buffer + 1, sizeof(buffer) - 1);
+			compressed_size != 0 && (compressed_size + 1) < data.size()
+			)
+		{
+			buffer[0] = decompressed_size;
+			return std::string((const char*)buffer, compressed_size + 1);
+		}
+	}
+	else
+	{
+		if (auto compressed_size = lzf::compress(data.data() + 1, data.size() - 1, buffer + 2, sizeof(buffer) - 2);
+			compressed_size != 0 && (compressed_size + 2) < data.size()
+			)
+		{
+			buffer[0] = (decompressed_size >> 6) | 0xC0;
+			buffer[1] = (decompressed_size & 0x3F) | 0x80;
+			return std::string((const char*)buffer, compressed_size + 2);
+		}
+	}
+	return data;
+}
+
 static std::string packData(const std::string& data, const std::string_view& salt)
 {
 	StringWriter sw;
@@ -199,34 +227,10 @@ static std::string packData(const std::string& data, const std::string_view& sal
 	//std::cout << "Server says: " << string::bin2hex(sw.data) << std::endl;
 
 #if true
-	{
-		uint16_t decompressed_size = sw.data.size() - 1;
-		uint8_t buffer[0x1000];
-		if (decompressed_size <= 0x3F)
-		{
-			if (auto compressed_size = lzf::compress(sw.data.data() + 1, sw.data.size() - 1, buffer + 1, sizeof(buffer) - 1);
-				compressed_size != 0 && (compressed_size + 1) < sw.data.size()
-				)
-			{
-				buffer[0] = decompressed_size;
-				return std::string((const char*)buffer, compressed_size + 1);
-			}
-		}
-		else
-		{
-			if (auto compressed_size = lzf::compress(sw.data.data() + 1, sw.data.size() - 1, buffer + 2, sizeof(buffer) - 2);
-				compressed_size != 0 && (compressed_size + 2) < sw.data.size()
-				)
-			{
-				buffer[0] = (decompressed_size >> 6) | 0x80;
-				buffer[1] = (decompressed_size & 0x3F) | 0xC0;
-				return std::string((const char*)buffer, compressed_size + 2);
-			}
-		}
-	}
-#endif
-
+	return compressPacket(std::move(sw.data));
+#else
 	SOUP_MOVE_RETURN(sw.data);
+#endif
 }
 
 static bool unpackData(const SocketAddr& addr, MemoryRefReader& sr, std::string& data, bool for_proxy)
@@ -462,6 +466,8 @@ static void pack_custom_message(std::string& msg)
 	const std::string_view salt = "b471e49539930dc9b5a131e6247c7387A";
 	const auto initial = crc32::hash((const uint8_t*)msg.data() + 5, msg.size() - 5, 0);
 	*(uint32_t*)(msg.data() + 1) = Endianness::toNetwork(crc32::hash((const uint8_t*)salt.data(), salt.size(), initial));
+
+	msg = compressPacket(std::move(msg));
 }
 
 static void send_custom_message(uint8_t bindingServerId, std::string&& msg)
@@ -528,6 +534,122 @@ static void collect_garbage()
 		}
 	}
 }
+
+struct AccountResolveResponse
+{
+	MongoId account_id;
+	uint32_t reflexive_ip = 0;
+	uint32_t local_ip = 0;
+	uint16_t reflexive_port = 0;
+	uint16_t local_port = 0;
+	uint8_t bindingServerId = THIS_SERVER_ID;
+
+	void write(StringWriter& sw, const std::string_view& salt)
+	{
+		account_id.io(sw);
+		if (reflexive_ip != 0)
+		{
+			if (bindingServerId != THIS_SERVER_ID)
+			{
+				if (!is_u32_or_below(salt))
+				{
+					uint8_t b = 0x80 | (bindingServerId + 1); sw.u8(b);
+				}
+				else
+				{
+					uint8_t b = ~bindingServerId; sw.u8(b);
+				}
+			}
+			else
+			{
+				if (!is_u32_or_below(salt))
+				{
+					uint8_t b = 0x81; sw.u8(b);
+				}
+				else
+				{
+					uint8_t b = 4; sw.u8(b);
+				}
+			}
+			uint32_t masked_reflexive_ip = reflexive_ip ^ 0xAAAAAAAA;
+			uint32_t masked_local_ip = local_ip ^ 0xAAAAAAAA;
+			uint16_t masked_reflexive_port = reflexive_port ^ 0xAAAA;
+			uint16_t masked_local_port = local_port ^ 0xAAAA;
+			sw.u32_be(masked_reflexive_ip);
+			sw.u16_be(masked_reflexive_port);
+			sw.u32_be(masked_local_ip);
+			sw.u16_be(masked_local_port);
+		}
+		else
+		{
+			uint8_t b = 0; sw.u8(b);
+		}
+	}
+
+#if MULTI_NRS
+	bool hasUnresolvedRedirect()
+	{
+		return reflexive_ip == 0 && bindingServerId != THIS_SERVER_ID;
+	}
+
+	template <typename T>
+	bool custom_io(T& s)
+	{
+		return account_id.io(s)
+			&& s.u32_le(reflexive_ip)
+			&& s.u32_le(local_ip)
+			&& s.u16_le(reflexive_port)
+			&& s.u16_le(local_port)
+			&& s.u8(bindingServerId)
+			;
+	}
+#endif
+};
+
+struct ResolveResponse
+{
+	uint8_t task_id;
+	std::vector<AccountResolveResponse> results;
+
+	void write(StringWriter& sw, const std::string_view& salt)
+	{
+		{ uint8_t b = 0x68; sw.u8(b); }
+		sw.u8(task_id);
+		{ uint8_t num_results = results.size(); sw.u8(num_results); }
+		for (auto& result : results)
+		{
+			result.write(sw, salt);
+		}
+	}
+
+#if MULTI_NRS
+	template <typename T>
+	void custom_io(T& s)
+	{
+		s.u8(task_id);
+		if constexpr (T::isRead())
+		{
+			uint8_t num_results = 0;
+			s.u8(num_results);
+			results.clear();
+			results.reserve(num_results);
+			while (num_results--)
+			{
+				results.emplace_back().custom_io(s);
+			}
+		}
+		else
+		{
+			uint8_t num_results = results.size();
+			s.u8(num_results);
+			for (auto& result : results)
+			{
+				result.custom_io(s);
+			}
+		}
+	}
+#endif
+};
 
 enum IntroductionType : uint8_t
 {
@@ -1367,121 +1489,85 @@ int main(int argc, const char** argv)
 				{
 					sr.skip(64); // NatHash
 				}
-				uint8_t task_id;
-				sr.u8(task_id);
-				sr.skip(1); // num queries?
-				MongoId query;
-				query.io(sr);
+				ResolveResponse rr;
+				sr.u8(rr.task_id);
+				uint8_t num_queries = 0;
+				sr.u8(num_queries);
+				rr.results.reserve(num_queries);
+				while (num_queries--)
+				{
+					rr.results.emplace_back().account_id.io(sr);
+				}
 				if (sr.hasMore())
 				{
 					std::cout << addr.toString() << " - Query addresses but there's more: " << string::bin2hex(data) << std::endl;
 				}
-				//std::cout << addr.toString() << " - Resolving " << query.toString() << std::endl;
 
-				AccountData* result = nullptr;
 #if ENABLE_SHADOW_REALM
 				if (auto e = account_map.find(acctId); e != account_map.end())
 				{
 					if (!e->second.in_shadow_realm)
 #endif
 					{
-						if (auto e = account_map.find(query); e != account_map.end())
+						for (auto& r : rr.results)
 						{
-							if (e->second.isActive())
+							//std::cout << addr.toString() << " - Resolving " << r.account_id.toString() << std::endl;
+							if (auto e = account_map.find(r.account_id); e != account_map.end())
 							{
-#if ENABLE_SHADOW_REALM
-								if (!e->second.in_shadow_realm)
-#endif
+								if (e->second.isActive())
 								{
-									result = &e->second;
+#if ENABLE_SHADOW_REALM
+									if (!e->second.in_shadow_realm)
+#endif
+									{
+#if FORCE_PROXY_CONNECTIONS
+										r.reflexive_ip = e->second.reflexive_ip;
+										r.local_ip = e->second.local_ip;
+#else
+										r.reflexive_ip = SOUP_IPV4(10, 0, 0, 0);
+										r.local_ip = SOUP_IPV4(10, 0, 0, 0);
+#endif
+										r.reflexive_port = ((packet_id & 0x20) ? e->second.reflexive_port_server : e->second.reflexive_port_client) ^ 0xAAAA;
+										r.local_port = ((packet_id & 0x20) ? e->second.local_port_server : e->second.local_port_client) ^ 0xAAAA;
+									}
+									continue;
 								}
-							}
-							else
-							{
 								erase_account(e);
 							}
-						}
 #if MULTI_NRS
-						if (result == nullptr)
-						{
-							if (auto e = remote_account_map.find(query); e != remote_account_map.end())
+							if (auto e = remote_account_map.find(r.account_id); e != remote_account_map.end())
 							{
-								if (!is_u32_or_below(salt))
-								{
-									StringWriter sw;
-									sw.u8(packet_id);
-
-									acctId.io(sw);
-									{ network_u32_t reply_ip = addr.ip.getV4(); sw.u32_le(reply_ip); }
-									{ network_u16_t reply_port = addr.port; sw.u16_le(reply_port); }
-
-									sw.u8(task_id);
-									query.io(sw);
-									send_custom_message(e->second, std::move(sw.data));
-								}
-								else
-								{
-									StringWriter sw;
-									{ uint8_t b = 0x68; sw.u8(b); }
-									sw.u8(task_id);
-									{ uint8_t b = 1; sw.u8(b); } // num results
-									query.io(sw); // result 0 account id
-									uint8_t redirect = ~e->second; sw.u8(redirect);
-									udp_send(s, addr, packData(sw.data, salt), is_dtls);
-								}
-								break;
+								r.bindingServerId = e->second;
 							}
-						}
 #endif
+						}
 					}
 #if ENABLE_SHADOW_REALM
+				}
+#endif
+
+#if MULTI_NRS
+				for (auto& r : rr.results)
+				{
+					if (r.hasUnresolvedRedirect())
+					{
+						StringWriter sw;
+						sw.u8(packet_id);
+						{ uint8_t origin_bindingServerId = THIS_SERVER_ID; sw.u8(origin_bindingServerId); }
+
+						acctId.io(sw);
+						{ network_u32_t reply_ip = addr.ip.getV4(); sw.u32_le(reply_ip); }
+						{ network_u16_t reply_port = addr.port; sw.u16_le(reply_port); }
+
+						rr.custom_io(sw);
+						send_custom_message(r.bindingServerId, std::move(sw.data));
+						return;
+					}
 				}
 #endif
 
 				StringWriter sw;
-				{ uint8_t b = 0x68; sw.u8(b); }
-				sw.u8(task_id);
-				{ uint8_t b = 1; sw.u8(b); } // num results
-				query.io(sw); // result 0 account id
-				if (result)
-				{
-					if (!is_u32_or_below(salt))
-					{
-						{ uint8_t b = 0x81; sw.u8(b); } // result 0 bitflags
-					}
-					else
-					{
-						{ uint8_t b = 4; sw.u8(b); } // result 0 bitflags
-					}
-					{
-#if FORCE_PROXY_CONNECTIONS
-						uint32_t masked_ip = SOUP_IPV4(10, 0, 0, 0) ^ 0xAAAAAAAA;
-#else
-						uint32_t masked_ip = result->reflexive_ip ^ 0xAAAAAAAA;
-#endif
-						sw.u32_be(masked_ip);
-					}
-					{
-						uint16_t masked_port = ((packet_id & 0x20) ? result->reflexive_port_server : result->reflexive_port_client) ^ 0xAAAA;
-						sw.u16_le(masked_port);
-					}
-					{
-#if FORCE_PROXY_CONNECTIONS
-						uint32_t masked_ip = SOUP_IPV4(10, 0, 0, 0) ^ 0xAAAAAAAA;
-#else
-						uint32_t masked_ip = result->local_ip ^ 0xAAAAAAAA;
-#endif
-						sw.u32_be(masked_ip);
-					}
-					{
-						uint16_t masked_port = ((packet_id & 0x20) ? result->local_port_server : result->local_port_client) ^ 0xAAAA;
-						sw.u16_le(masked_port);
-					}
-				}
-				else
-				{
-					{ uint8_t b = 0; sw.u8(b); } // result 0 bitflags
-				}
+				rr.write(sw, salt);
 				udp_send(s, addr, packData(sw.data, salt), is_dtls);
 			}
 			else
@@ -1807,7 +1893,7 @@ int main(int argc, const char** argv)
 				{
 					if (e->second.isActive())
 					{
-						e->second.sendGameInvite(s, acctId, target, session_info, inviter_name, presence_state);
+						e->second.sendGameInvite(s, acctId, target, session_info, inviter_name, presence_state, bindingServerId);
 						break;
 					}
 					erase_account(e);
@@ -2146,89 +2232,82 @@ int main(int argc, const char** argv)
 					case 0x52: // Query client addresses
 					case 0x72: // Query server addresses
 						{
+							uint8_t origin_bindingServerId; sr.u8(origin_bindingServerId);
 							MongoId acctId; acctId.io(sr);
 							network_u32_t reply_ip; sr.u32_le(reply_ip);
 							network_u16_t reply_port; sr.u16_le(reply_port);
-							uint8_t task_id; sr.u8(task_id);
-							MongoId query; query.io(sr);
-							//std::cout << addr.toString() << " - Resolving " << query.toString() << " for " << acctId.toString() << std::endl;
+							ResolveResponse rr; rr.custom_io(sr);
 
-							AccountData* result = nullptr;
-							if (auto e = account_map.find(query); e != account_map.end())
+							for (auto& r : rr.results)
 							{
-								if (e->second.isActive())
+								//std::cout << addr.toString() << " - Resolving " << r.account_id.toString() << " for " << acctId.toString() << std::endl;
+								if (auto e = account_map.find(r.account_id); e != account_map.end())
 								{
-#if ENABLE_SHADOW_REALM
-									if (!e->second.in_shadow_realm)
-#endif
+									if (e->second.isActive())
 									{
-										result = &e->second;
+#if ENABLE_SHADOW_REALM
+										if (!e->second.in_shadow_realm)
+#endif
+										{
+#if FORCE_PROXY_CONNECTIONS
+											r.reflexive_ip = e->second.reflexive_ip;
+											r.local_ip = e->second.local_ip;
+#else
+											r.reflexive_ip = SOUP_IPV4(10, 0, 0, 0);
+											r.local_ip = SOUP_IPV4(10, 0, 0, 0);
+#endif
+											r.reflexive_port = ((c & 0x20) ? e->second.reflexive_port_server : e->second.reflexive_port_client) ^ 0xAAAA;
+											r.local_port = ((c & 0x20) ? e->second.local_port_server : e->second.local_port_client) ^ 0xAAAA;
+										}
 									}
-								}
-								else
-								{
-									erase_account(e);
+									else
+									{
+										erase_account(e);
+									}
 								}
 							}
 
+							for (auto& r : rr.results)
+							{
+								if (r.hasUnresolvedRedirect())
+								{
+									StringWriter sw;
+									sw.u8(packet_id);
+									sw.u8(origin_bindingServerId);
+
+									acctId.io(sw);
+									sw.u32_le(reply_ip);
+									sw.u16_le(reply_port);
+
+									rr.custom_io(sw);
+									send_custom_message(r.bindingServerId, std::move(sw.data));
+									return;
+								}
+							}
 
 							StringWriter sw;
 							{ char c = '>'; sw.c(c); }
-
 							acctId.io(sw);
 							sw.u32_le(reply_ip);
 							sw.u16_le(reply_port);
-
-							{ uint8_t b = 0x68; sw.u8(b); }
-							sw.u8(task_id);
-							{ uint8_t b = 1; sw.u8(b); } // num results
-							query.io(sw); // result 0 account id
-							if (result)
-							{
-								{ uint8_t redirect = 0x80 | (THIS_SERVER_ID + 1); sw.u8(redirect); }
-								{
-#if FORCE_PROXY_CONNECTIONS
-									uint32_t masked_ip = SOUP_IPV4(10, 0, 0, 0) ^ 0xAAAAAAAA;
-#else
-									uint32_t masked_ip = result->reflexive_ip ^ 0xAAAAAAAA;
-#endif
-									sw.u32_be(masked_ip);
-								}
-								{
-									uint16_t masked_port = ((c & 0x20) ? result->reflexive_port_server : result->reflexive_port_client) ^ 0xAAAA;
-									sw.u16_le(masked_port);
-								}
-								{
-#if FORCE_PROXY_CONNECTIONS
-									uint32_t masked_ip = SOUP_IPV4(10, 0, 0, 0) ^ 0xAAAAAAAA;
-#else
-									uint32_t masked_ip = result->local_ip ^ 0xAAAAAAAA;
-#endif
-									sw.u32_be(masked_ip);
-								}
-								{
-									uint16_t masked_port = ((c & 0x20) ? result->local_port_server : result->local_port_client) ^ 0xAAAA;
-									sw.u16_le(masked_port);
-								}
-							}
-							else
-							{
-								{ uint8_t b = 0; sw.u8(b); } // result 0 bitflags
-							}
-							send_custom_message(bindingServerId, std::move(sw.data));
+							rr.custom_io(sw);
+							send_custom_message(origin_bindingServerId, std::move(sw.data));
 						}
 						break;
 
-					case '>':
+					case '>': // Resolve-results
 						{
 							MongoId acctId; acctId.io(sr);
 							network_u32_t reply_ip; sr.u32_le(reply_ip);
 							network_u16_t reply_port; sr.u16_le(reply_port);
+							ResolveResponse rr; rr.custom_io(sr);
 							if (auto e = account_map.find(acctId); e != account_map.end())
 							{
+								StringWriter sw;
+								rr.write(sw, e->second.salt);
 								SocketAddr reply_to(reply_ip, reply_port);
-								//std::cout << addr.toString() << " - Forward reply to " << reply_to.toString() << ": " << string::bin2hex(data.substr(sr.getPosition())) << std::endl;
-								udp_send(s, reply_to, packData(data.substr(sr.getPosition()), e->second.salt), e->second.is_dtls);
+								//std::cout << addr.toString() << " - Got resolve-results for " << reply_to.toString() << "#" << acctId.toString() << std::endl;
+								udp_send(s, reply_to, packData(sw.data, e->second.salt), e->second.is_dtls);
 							}
 						}
 						break;
