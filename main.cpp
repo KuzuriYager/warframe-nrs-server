@@ -2477,8 +2477,9 @@ int main(int argc, const char** argv)
 						{
 							if (it->second.presence.c_str()[pos + 9] != '"')
 							{
-								const MongoId sessionId = it->second.presence.substr(pos + 9, 24);
+								const MongoId sessionId = string::hex2bin(it->second.presence.substr(pos + 9, 24));
 								const uint32_t serverId = sessionId.getProcessHash();
+								//std::cout << sessionId.toString() << " - " << serverId << std::endl;
 								auto server_e = server_session_players.find(serverId);
 								if (server_e == server_session_players.end())
 								{
