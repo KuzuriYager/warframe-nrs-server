@@ -9,6 +9,7 @@
 	#endif
 #endif
 
+// Users banished to the shadow realm have incoming and outgoing P2P connection attempts blocked.
 #define ENABLE_SHADOW_REALM DEPLOYMENT
 #define BANISH_U41_1_TO_SHADOW_REALM false
 #define BANISH_U42_TO_SHADOW_REALM DEPLOYMENT
@@ -960,21 +961,17 @@ int main(int argc, const char** argv)
 					// ',' acctId ',' NatHash
 				}
 
-#if ENABLE_SHADOW_REALM
-				if (auto e = account_map.find(acctId); e != account_map.end())
+#if ENABLE_SHADOW_REALM && BANISH_U42_TO_SHADOW_REALM
+				if (is_u42)
 				{
-					if (e->second.in_shadow_realm)
+					if (auto e = account_map.find(acctId); e != account_map.end())
 					{
-						break;
+						if (!e->second.in_shadow_realm)
+						{
+							e->second.in_shadow_realm = true;
+							std::cout << addr.toString() << "#" << acctId.toString() << " - Banished to the shadow realm" << std::endl;
+						}
 					}
-	#if BANISH_U42_TO_SHADOW_REALM
-					if (is_u42)
-					{
-						e->second.in_shadow_realm = true;
-						std::cout << addr.toString() << "#" << acctId.toString() << " - Banished to the shadow realm" << std::endl;
-						break;
-					}
-	#endif
 				}
 #endif
 
@@ -1137,17 +1134,14 @@ int main(int argc, const char** argv)
 					//std::cout << addr.toString() << "#" << acctId.toString() << " - NAT bound for client " << string::bin2hex(acctId) << std::endl;
 					//std::cout << addr.toString() << "#" << acctId.toString() << " - Client Local Addr: " << IpAddr((native_u32_t)local_ip).toString() << ":" << local_port << std::endl;
 					//std::cout << addr.toString() << "#" << acctId.toString() << " - Status: " << (int)data->status << std::endl;
-					if (
-						presence != data->presence
-#if ENABLE_SHADOW_REALM
-						&& !data->in_shadow_realm
-#endif
-						)
+					if (presence != data->presence)
 					{
 						data->presence = std::move(presence);
 						std::cout << addr.toString() << "#" << acctId.toString() << " - Updated presence: " << data->presence << std::endl;
 #if ENABLE_SHADOW_REALM && BANISH_U41_1_TO_SHADOW_REALM
-						if (data->presence.find("{\"l\":") != std::string::npos || data->presence.find(",\"l\":") != std::string::npos)
+						if (!data->in_shadow_realm
+							&& (data->presence.find("{\"l\":") != std::string::npos || data->presence.find(",\"l\":") != std::string::npos)
+							)
 						{
 							data->in_shadow_realm = true;
 							std::cout << addr.toString() << "#" << acctId.toString() << " - Banished to the shadow realm" << std::endl;
@@ -1292,16 +1286,6 @@ int main(int argc, const char** argv)
 				uint8_t num_queries = 0;
 				sr.u8(num_queries);
 
-#if ENABLE_SHADOW_REALM
-				if (auto e = account_map.find(acctId); e != account_map.end())
-				{
-					if (e->second.in_shadow_realm)
-					{
-						break;
-					}
-				}
-#endif
-
 				StringWriter sw;
 				{ uint8_t b = 0x6c; sw.u8(b); }
 				sw.u8(task_id);
@@ -1364,15 +1348,6 @@ int main(int argc, const char** argv)
 #if ENABLE_SHADOW_REALM || MULTI_NRS
 				MongoId acctId;
 				acctId.io(sr);
-	#if ENABLE_SHADOW_REALM
-				if (auto e = account_map.find(acctId); e != account_map.end())
-				{
-					if (e->second.in_shadow_realm)
-					{
-						break;
-					}
-				}
-	#endif
 #else
 				sr.skip(12); // acctId
 #endif
@@ -1390,82 +1365,112 @@ int main(int argc, const char** argv)
 					std::cout << addr.toString() << " - Query addresses but there's more: " << string::bin2hex(data) << std::endl;
 				}
 				//std::cout << addr.toString() << " - Resolving " << query.toString() << std::endl;
-				if (auto e = account_map.find(query); e != account_map.end())
+
+				AccountData* result = nullptr;
+#if ENABLE_SHADOW_REALM
+				if (auto e = account_map.find(acctId); e != account_map.end())
 				{
-					if (e->second.isActive())
-					{
-						StringWriter sw;
-						{ uint8_t b = 0x68; sw.u8(b); }
-						sw.u8(task_id);
-						{ uint8_t b = 1; sw.u8(b); } // num results
-						query.io(sw); // result 0 account id
-						if (!is_u32_or_below(salt))
-						{
-							{ uint8_t b = 0x81; sw.u8(b); } // result 0 bitflags
-						}
-						else
-						{
-							{ uint8_t b = 4; sw.u8(b); } // result 0 bitflags
-						}
-						{
-#if FORCE_PROXY_CONNECTIONS
-							uint32_t masked_ip = SOUP_IPV4(10, 0, 0, 0) ^ 0xAAAAAAAA;
-#else
-							uint32_t masked_ip = e->second.reflexive_ip ^ 0xAAAAAAAA;
+					if (!e->second.in_shadow_realm)
 #endif
-							sw.u32_be(masked_ip);
-						}
-						{
-							uint16_t masked_port = ((packet_id & 0x20) ? e->second.reflexive_port_server : e->second.reflexive_port_client) ^ 0xAAAA;
-							sw.u16_le(masked_port);
-						}
-						{
-#if FORCE_PROXY_CONNECTIONS
-							uint32_t masked_ip = SOUP_IPV4(10, 0, 0, 0) ^ 0xAAAAAAAA;
-#else
-							uint32_t masked_ip = e->second.local_ip ^ 0xAAAAAAAA;
-#endif
-							sw.u32_be(masked_ip);
-						}
-						{
-							uint16_t masked_port = ((packet_id & 0x20) ? e->second.local_port_server : e->second.local_port_client) ^ 0xAAAA;
-							sw.u16_le(masked_port);
-						}
-						udp_send(s, addr, packData(sw.data, salt), is_dtls);
-					}
-					else
 					{
-						erase_account(e);
-					}
-				}
+						if (auto e = account_map.find(query); e != account_map.end())
+						{
+							if (e->second.isActive())
+							{
+#if ENABLE_SHADOW_REALM
+								if (!e->second.in_shadow_realm)
+#endif
+								{
+									result = &e->second;
+								}
+							}
+							else
+							{
+								erase_account(e);
+							}
+						}
 #if MULTI_NRS
-				if (auto e = remote_account_map.find(query); e != remote_account_map.end())
+						if (result == nullptr)
+						{
+							if (auto e = remote_account_map.find(query); e != remote_account_map.end())
+							{
+								if (!is_u32_or_below(salt))
+								{
+									StringWriter sw;
+									sw.u8(packet_id);
+
+									acctId.io(sw);
+									{ network_u32_t reply_ip = addr.ip.getV4(); sw.u32_le(reply_ip); }
+									{ network_u16_t reply_port = addr.port; sw.u16_le(reply_port); }
+
+									sw.u8(task_id);
+									query.io(sw);
+									send_custom_message(e->second, std::move(sw.data));
+								}
+								else
+								{
+									StringWriter sw;
+									{ uint8_t b = 0x68; sw.u8(b); }
+									sw.u8(task_id);
+									{ uint8_t b = 1; sw.u8(b); } // num results
+									query.io(sw); // result 0 account id
+									uint8_t redirect = ~e->second; sw.u8(redirect);
+									udp_send(s, addr, packData(sw.data, salt), is_dtls);
+								}
+								break;
+							}
+						}
+#endif
+					}
+#if ENABLE_SHADOW_REALM
+				}
+#endif
+
+				StringWriter sw;
+				{ uint8_t b = 0x68; sw.u8(b); }
+				sw.u8(task_id);
+				{ uint8_t b = 1; sw.u8(b); } // num results
+				query.io(sw); // result 0 account id
+				if (result)
 				{
 					if (!is_u32_or_below(salt))
 					{
-						StringWriter sw;
-						sw.u8(packet_id);
-
-						acctId.io(sw);
-						{ network_u32_t reply_ip = addr.ip.getV4(); sw.u32_le(reply_ip); }
-						{ network_u16_t reply_port = addr.port; sw.u16_le(reply_port); }
-
-						sw.u8(task_id);
-						query.io(sw);
-						send_custom_message(e->second, std::move(sw.data));
+						{ uint8_t b = 0x81; sw.u8(b); } // result 0 bitflags
 					}
 					else
 					{
-						StringWriter sw;
-						{ uint8_t b = 0x68; sw.u8(b); }
-						sw.u8(task_id);
-						{ uint8_t b = 1; sw.u8(b); } // num results
-						query.io(sw); // result 0 account id
-						uint8_t redirect = ~e->second; sw.u8(redirect);
-						udp_send(s, addr, packData(sw.data, salt), is_dtls);
+						{ uint8_t b = 4; sw.u8(b); } // result 0 bitflags
+					}
+					{
+#if FORCE_PROXY_CONNECTIONS
+						uint32_t masked_ip = SOUP_IPV4(10, 0, 0, 0) ^ 0xAAAAAAAA;
+#else
+						uint32_t masked_ip = result->reflexive_ip ^ 0xAAAAAAAA;
+#endif
+						sw.u32_be(masked_ip);
+					}
+					{
+						uint16_t masked_port = ((packet_id & 0x20) ? result->reflexive_port_server : result->reflexive_port_client) ^ 0xAAAA;
+						sw.u16_le(masked_port);
+					}
+					{
+#if FORCE_PROXY_CONNECTIONS
+						uint32_t masked_ip = SOUP_IPV4(10, 0, 0, 0) ^ 0xAAAAAAAA;
+#else
+						uint32_t masked_ip = result->local_ip ^ 0xAAAAAAAA;
+#endif
+						sw.u32_be(masked_ip);
+					}
+					{
+						uint16_t masked_port = ((packet_id & 0x20) ? result->local_port_server : result->local_port_client) ^ 0xAAAA;
+						sw.u16_le(masked_port);
 					}
 				}
-#endif
+				else
+				{
+					{ uint8_t b = 0; sw.u8(b); } // result 0 bitflags
+				}
+				udp_send(s, addr, packData(sw.data, salt), is_dtls);
 			}
 			else
 			{
@@ -1614,7 +1619,7 @@ int main(int argc, const char** argv)
 #if ENABLE_SHADOW_REALM
 					if (e->second.in_shadow_realm)
 					{
-						break;
+						break; // This should be unreachable due to resolve-response.
 					}
 #endif
 					local_ip = e->second.local_ip;
@@ -1626,6 +1631,12 @@ int main(int argc, const char** argv)
 				{
 					if (e->second.isActive())
 					{
+#if ENABLE_SHADOW_REALM
+						if (e->second.in_shadow_realm)
+						{
+							break; // This should be unreachable due to resolve-response.
+						}
+#endif
 						SocketAddr to_addr(e->second.reflexive_ip, to_server ? e->second.reflexive_port_server : e->second.reflexive_port_client);
 #if FORCE_PROXY_CONNECTIONS
 						// For emulation's sake
@@ -1681,6 +1692,16 @@ int main(int argc, const char** argv)
 				}
 				//std::cout << addr.toString() << " - Proxy request for " << target.toString() << std::endl;
 
+#if ENABLE_SHADOW_REALM
+				if (auto e = account_map.find(acctId); e != account_map.end())
+				{
+					if (e->second.in_shadow_realm)
+					{
+						break; // This should be unreachable due to resolve-response.
+					}
+				}
+#endif
+
 				if (auto proxy_port = setup_proxying(acctId, false, target, true))
 				{
 					std::cout << addr.toString() << "#" << acctId.toString() << " - Obtained proxy port " << Endianness::toNative(proxy_port) << " to connect to " << target.toString() << std::endl;
@@ -1689,7 +1710,12 @@ int main(int argc, const char** argv)
 					{
 						if (e->second.isActive())
 						{
-							send_introduction(s, acctId, target, SocketAddr(this_machine_ip, proxy_port), SocketAddr(e->second.reflexive_ip, e->second.reflexive_port_server), IT_VIA_PROXY, task_id, e->second.salt, e->second.is_dtls);
+#if ENABLE_SHADOW_REALM
+							if (!e->second.in_shadow_realm) // This should always be true due to resolve-response.
+#endif
+							{
+								send_introduction(s, acctId, target, SocketAddr(this_machine_ip, proxy_port), SocketAddr(e->second.reflexive_ip, e->second.reflexive_port_server), IT_VIA_PROXY, task_id, e->second.salt, e->second.is_dtls);
+							}
 							break;
 						}
 						erase_account(e);
@@ -1759,12 +1785,6 @@ int main(int argc, const char** argv)
 						std::cout << addr.toString() << " - Game invite expected username " << e->second.username << " but got " << inviter_name << std::endl;
 						e->second.username = inviter_name;
 					}
-#if ENABLE_SHADOW_REALM
-					if (e->second.in_shadow_realm)
-					{
-						break;
-					}
-#endif
 				}
 				if (sr.hasMore())
 				{
@@ -1818,15 +1838,6 @@ int main(int argc, const char** argv)
 			{
 				MongoId acctId;
 				acctId.io(sr);
-#if ENABLE_SHADOW_REALM
-				if (auto e = account_map.find(acctId); e != account_map.end())
-				{
-					if (e->second.in_shadow_realm)
-					{
-						break;
-					}
-				}
-#endif
 				MongoId target;
 				target.io(sr);
 				uint8_t status; // 1 = received. 3 = declined. 4 = failed to join.
@@ -2129,46 +2140,70 @@ int main(int argc, const char** argv)
 							uint8_t task_id; sr.u8(task_id);
 							MongoId query; query.io(sr);
 							//std::cout << addr.toString() << " - Resolving " << query.toString() << " for " << acctId.toString() << std::endl;
+
+							AccountData* result = nullptr;
 							if (auto e = account_map.find(query); e != account_map.end())
 							{
-								StringWriter sw;
-								{ char c = '>'; sw.c(c); }
+								if (e->second.isActive())
+								{
+#if ENABLE_SHADOW_REALM
+									if (!e->second.in_shadow_realm)
+#endif
+									{
+										result = &e->second;
+									}
+								}
+								else
+								{
+									erase_account(e);
+								}
+							}
 
-								acctId.io(sw);
-								sw.u32_le(reply_ip);
-								sw.u16_le(reply_port);
 
-								{ uint8_t b = 0x68; sw.u8(b); }
-								sw.u8(task_id);
-								{ uint8_t b = 1; sw.u8(b); } // num results
-								query.io(sw); // result 0 account id
+							StringWriter sw;
+							{ char c = '>'; sw.c(c); }
+
+							acctId.io(sw);
+							sw.u32_le(reply_ip);
+							sw.u16_le(reply_port);
+
+							{ uint8_t b = 0x68; sw.u8(b); }
+							sw.u8(task_id);
+							{ uint8_t b = 1; sw.u8(b); } // num results
+							query.io(sw); // result 0 account id
+							if (result)
+							{
 								{ uint8_t redirect = 0x80 | (THIS_SERVER_ID + 1); sw.u8(redirect); }
 								{
 #if FORCE_PROXY_CONNECTIONS
 									uint32_t masked_ip = SOUP_IPV4(10, 0, 0, 0) ^ 0xAAAAAAAA;
 #else
-									uint32_t masked_ip = e->second.reflexive_ip ^ 0xAAAAAAAA;
+									uint32_t masked_ip = result->reflexive_ip ^ 0xAAAAAAAA;
 #endif
 									sw.u32_be(masked_ip);
 								}
 								{
-									uint16_t masked_port = ((packet_id & 0x20) ? e->second.reflexive_port_server : e->second.reflexive_port_client) ^ 0xAAAA;
+									uint16_t masked_port = ((c & 0x20) ? result->reflexive_port_server : result->reflexive_port_client) ^ 0xAAAA;
 									sw.u16_le(masked_port);
 								}
 								{
 #if FORCE_PROXY_CONNECTIONS
 									uint32_t masked_ip = SOUP_IPV4(10, 0, 0, 0) ^ 0xAAAAAAAA;
 #else
-									uint32_t masked_ip = e->second.local_ip ^ 0xAAAAAAAA;
+									uint32_t masked_ip = result->local_ip ^ 0xAAAAAAAA;
 #endif
 									sw.u32_be(masked_ip);
 								}
 								{
-									uint16_t masked_port = ((packet_id & 0x20) ? e->second.local_port_server : e->second.local_port_client) ^ 0xAAAA;
+									uint16_t masked_port = ((c & 0x20) ? result->local_port_server : result->local_port_client) ^ 0xAAAA;
 									sw.u16_le(masked_port);
 								}
-								send_custom_message(bindingServerId, std::move(sw.data));
 							}
+							else
+							{
+								{ uint8_t b = 0; sw.u8(b); } // result 0 bitflags
+							}
+							send_custom_message(bindingServerId, std::move(sw.data));
 						}
 						break;
 
