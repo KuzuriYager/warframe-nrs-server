@@ -1891,6 +1891,12 @@ int main(int argc, const char** argv)
 				{
 					MongoId target; target.io(sr);
 					std::string json; ser_str(sr, salt, json);
+					if (json.c_str()[0] != '{')
+					{
+						std::cout << addr.toString() << " - Malformed social change packet: " << string::bin2hex(data) << std::endl;
+						std::cout << addr.toString() << " - salt = " << salt << std::endl;
+						break;
+					}
 					if (auto e = account_map.find(target); e != account_map.end())
 					{
 						if (e->second.isActive())
