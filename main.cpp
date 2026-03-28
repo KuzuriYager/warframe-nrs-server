@@ -1886,17 +1886,17 @@ int main(int argc, const char** argv)
 			{
 				MongoId acctId; acctId.io(sr);
 				uint8_t type; sr.u8(type); // 29 = accept friend request, 30 = remove friend
-				uint8_t num_changes = 0; sr.u8(num_changes);
-				while (num_changes--)
+				uint8_t num_targets = 0; sr.u8(num_targets);
+				std::vector<MongoId> targets;
+				targets.reserve(num_targets);
+				while (num_targets--)
 				{
-					MongoId target; target.io(sr);
-					std::string json; ser_str(sr, salt, json);
-					if (json.c_str()[0] != '{')
-					{
-						std::cout << addr.toString() << " - Malformed social change packet: " << string::bin2hex(data) << std::endl;
-						std::cout << addr.toString() << " - salt = " << salt << std::endl;
-						break;
-					}
+					targets.emplace_back().io(sr);
+				}
+				std::string json; ser_str(sr, salt, json);
+
+				for (auto& target : targets)
+				{
 					if (auto e = account_map.find(target); e != account_map.end())
 					{
 						if (e->second.isActive())
