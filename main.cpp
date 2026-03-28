@@ -280,9 +280,10 @@ static bool ser_str(T& s, const std::string_view& salt, std::string& str)
 	return true;
 }
 
-struct MongoId
+union MongoId
 {
 	uint32_t ints[3];
+	uint8_t bytes[12];
 
 	MongoId()
 	{
@@ -319,6 +320,17 @@ struct MongoId
 	std::string toString() const noexcept
 	{
 		return string::bin2hexLower((const char*)ints, 12);
+	}
+
+	uint32_t getProcessHash() const noexcept
+	{
+		uint32_t hash = 2166136261u;
+		for (auto i = 4; i != 9; ++i)
+		{
+			hash ^= bytes[i];
+			hash *= 16777619u;
+		}
+		return hash;
 	}
 };
 
@@ -2372,6 +2384,7 @@ int main(int argc, const char** argv)
 		else if (req.path == "/api/stats")
 		{
 			JsonObject obj;
+			std::unordered_map<uint32_t, std::unordered_map<MongoId, uint8_t>> server_session_players;
 			{
 				uint32_t allocated_accounts = 0;
 				uint32_t active_accounts = 0;
@@ -2381,6 +2394,27 @@ int main(int argc, const char** argv)
 					if (it->second.isActive())
 					{
 						++active_accounts;
+						if (auto pos = it->second.presence.find(R"(":{"id":")"); pos != std::string::npos)
+						{
+							if (it->second.presence.c_str()[pos + 9] != '"')
+							{
+								const MongoId sessionId = it->second.presence.substr(pos + 9, 24);
+								const uint32_t serverId = sessionId.getProcessHash();
+								auto server_e = server_session_players.find(serverId);
+								if (server_e == server_session_players.end())
+								{
+									server_e = server_session_players.emplace(serverId, std::unordered_map<MongoId, uint8_t>{}).first;
+								}
+								if (auto session_e = server_e->second.find(sessionId); session_e != server_e->second.end())
+								{
+									session_e->second += 1;
+								}
+								else
+								{
+									server_e->second.emplace(sessionId, 1);
+								}
+							}
+						}
 					}
 				}
 				obj.add("allocated_accounts", allocated_accounts);
@@ -2400,6 +2434,19 @@ int main(int argc, const char** argv)
 			}
 			obj.add("total_proxies", MAX_PROXY_CONNECTIONS);
 #endif
+			{
+				auto servers = soup::make_unique<JsonArray>();
+				for (const auto& server : server_session_players)
+				{
+					auto sessions = soup::make_unique<JsonArray>();
+					for (const auto& session : server.second)
+					{
+						sessions->children.emplace_back(soup::make_unique<JsonInt>(session.second));
+					}
+					servers->children.emplace_back(std::move(sessions));
+				}
+				obj.add("server_session_players", std::move(servers));
+			}
 			ServerWebService::sendText(s, obj.encodePretty());
 		}
 		else if (req.path == "/api/me")
