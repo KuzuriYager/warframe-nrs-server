@@ -19,7 +19,7 @@
 
 #define ENABLE_HTTP true
 
-// Opportunistically ask clients for an introduction in an attempt to grab their username if it wasn't otherwise supplied.
+// Opportunistically ask clients for an introduction in an attempt to grab their username and buildId.
 #define REQUEST_INTRODUCTION true
 
 #define MULTI_NRS false
@@ -362,6 +362,9 @@ struct AccountData
 	time_t last_nat_bind;
 
 	std::string username;
+#if REQUEST_INTRODUCTION
+	int64_t buildId = 0;
+#endif
 
 	bool isActive() const noexcept
 	{
@@ -1213,19 +1216,21 @@ int main(int argc, const char** argv)
 							data->username = NatHash.c_str() + 4;
 						}
 					}
-#if REQUEST_INTRODUCTION
-					else if (data->presence.find("\"hid\":\"" + acctId.toString()) != std::string::npos)
-					{
-						for (const uint16_t& port : PORTS)
-						{
-							MongoId sender;
-							memset(sender.ints, 0x33, 12);
-							send_introduction(s, sender, acctId, SocketAddr(this_machine_ip, (native_u16_t)port), SocketAddr(data->reflexive_ip, data->reflexive_port_server), IT_FROM_PEER, 69, salt, is_dtls);
-							break;
-						}
-					}
-#endif
 				}
+#if REQUEST_INTRODUCTION
+				if ((data->buildId == 0 || data->username.empty())
+					&& data->presence.find("\"hid\":\"" + acctId.toString()) != std::string::npos
+					)
+				{
+					for (const uint16_t& port : PORTS)
+					{
+						MongoId sender;
+						memset(sender.ints, 0x33, 12);
+						send_introduction(s, sender, acctId, SocketAddr(this_machine_ip, (native_u16_t)port), SocketAddr(data->reflexive_ip, data->reflexive_port_server), IT_FROM_PEER, 69, salt, is_dtls);
+						break;
+					}
+				}
+#endif
 			}
 			break;
 
@@ -1981,6 +1986,7 @@ int main(int argc, const char** argv)
 
 #if REQUEST_INTRODUCTION
 					std::string hostName;
+					int64_t buildId = 0;
 					if (size_t pos = message.find(R"("hostName":)"); pos != std::string::npos)
 					{
 						pos += 11;
@@ -1989,7 +1995,15 @@ int main(int argc, const char** argv)
 							hostName = std::move(j->reinterpretAsStr().value);
 						}
 					}
-					if (!hostName.empty())
+					if (size_t pos = message.find(R"("buildId":)"); pos != std::string::npos)
+					{
+						pos += 10;
+						if (auto j = json::decode(message.data() + pos, message.size() - pos); j && j->isInt())
+						{
+							buildId = j->reinterpretAsInt();
+						}
+					}
+					if (!hostName.empty() || buildId != 0)
 					{
 						if (size_t pos = message.find(R"("hostId":)"); pos != std::string::npos)
 						{
@@ -1999,9 +2013,16 @@ int main(int argc, const char** argv)
 								std::string hostId = string::hex2bin(j->reinterpretAsStr().value);
 								if (auto e = account_map.find(hostId); e != account_map.end())
 								{
-									// TODO: Sanitise platform suffix so terminal doesn't get polluted?
-									//std::cout << addr.toString() << " - Provided username for " << j->reinterpretAsStr().value << ": " << hostName << std::endl;
-									e->second.username = std::move(hostName);
+									if (!hostName.empty())
+									{
+										// TODO: Sanitise platform suffix so terminal doesn't get polluted?
+										//std::cout << addr.toString() << " - Provided username for " << j->reinterpretAsStr().value << ": " << hostName << std::endl;
+										e->second.username = std::move(hostName);
+									}
+									if (buildId != 0)
+									{
+										e->second.buildId = buildId;
+									}
 								}
 							}
 						}
@@ -2415,6 +2436,10 @@ int main(int argc, const char** argv)
 					if (!e->second.username.empty())
 					{
 						obj.add("username", e->second.username);
+					}
+					if (e->second.buildId != 0)
+					{
+						obj.add("buildId", e->second.buildId);
 					}
 				}
 			}
