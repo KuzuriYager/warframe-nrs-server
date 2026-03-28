@@ -695,7 +695,7 @@ struct Proxy : public ServerServiceUdp
 
 	bool isActive() const noexcept
 	{
-		return time::unixSecondsSince(last_traffic) <= 60;
+		return time::unixSecondsSince(last_traffic) <= 7;
 	}
 };
 static Proxy proxies[MAX_PROXY_CONNECTIONS];
