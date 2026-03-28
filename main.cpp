@@ -19,7 +19,8 @@
 
 #define ENABLE_HTTP true
 
-#define USERNAMES true
+// Opportunistically ask clients for an introduction in an attempt to grab their username if it wasn't otherwise supplied.
+#define REQUEST_INTRODUCTION true
 
 #define MULTI_NRS false
 #define SERVERS { /* Same array as "NRS" in login response */ }
@@ -360,9 +361,7 @@ struct AccountData
 
 	time_t last_nat_bind;
 
-#if USERNAMES
 	std::string username;
-#endif
 
 	bool isActive() const noexcept
 	{
@@ -1049,9 +1048,7 @@ int main(int argc, const char** argv)
 		case 0x62: // NAT bind for server
 			{
 				MongoId acctId;
-#if USERNAMES
 				std::string NatHash;
-#endif
 				uint32_t local_ip;
 				uint16_t local_port;
 
@@ -1060,11 +1057,7 @@ int main(int argc, const char** argv)
 					acctId.io(sr);
 					if (is_u11_or_below(salt))
 					{
-#if USERNAMES
 						sr.str(64, NatHash);
-#else
-						sr.skip(64);
-#endif
 					}
 					sr.u32_be(local_ip);
 					sr.u16_le(local_port);
@@ -1086,13 +1079,9 @@ int main(int argc, const char** argv)
 						std::cout << addr.toString() << " - Malformed packet: " << string::bin2hex(data) << std::endl;
 						return;
 					}
-#if USERNAMES
 					std::string NatHash_hex;
 					sr.str(128, NatHash_hex);
 					NatHash = string::hex2bin(NatHash_hex);
-#else
-					sr.skip(128);
-#endif
 					SOUP_IF_UNLIKELY (char sep = 0; sr.c(sep), sep != ',')
 					{
 						std::cout << addr.toString() << " - Malformed packet: " << string::bin2hex(data) << std::endl;
@@ -1203,9 +1192,7 @@ int main(int argc, const char** argv)
 				}
 				udp_send(s, addr, packData(sw.data, salt), is_dtls);
 
-#if USERNAMES
 				if (data->username.empty())
-#endif
 				{
 					if (sr.hasMore()) // U42 + Token
 					{
@@ -1216,12 +1203,9 @@ int main(int argc, const char** argv)
 							std::cout << addr.toString() << "#" << acctId.toString() << " - Banished to the shadow realm" << std::endl;
 						}
 #endif
-#if USERNAMES
 						ser_str(sr, salt, data->username);
 						//sr.skip(40); // Token
-#endif
 					}
-#if USERNAMES
 					else if (!NatHash.empty())
 					{
 						if (NatHash.substr(0, 4) == "OWF1" && NatHash.back() == '\0')
@@ -1229,6 +1213,7 @@ int main(int argc, const char** argv)
 							data->username = NatHash.c_str() + 4;
 						}
 					}
+#if REQUEST_INTRODUCTION
 					else if (data->presence.find("\"hid\":\"" + acctId.toString()) != std::string::npos)
 					{
 						for (const uint16_t& port : PORTS)
@@ -1758,10 +1743,8 @@ int main(int argc, const char** argv)
 				std::string unk_str;
 				ser_str(sr, salt, unk_str);
 				SOUP_UNUSED(unk_str);
-#if ENABLE_SHADOW_REALM || USERNAMES
 				if (auto e = account_map.find(acctId); e != account_map.end())
 				{
-#if USERNAMES
 					if (e->second.username.empty())
 					{
 						e->second.username = inviter_name;
@@ -1771,7 +1754,6 @@ int main(int argc, const char** argv)
 						std::cout << addr.toString() << " - Game invite expected username " << e->second.username << " but got " << inviter_name << std::endl;
 						e->second.username = inviter_name;
 					}
-#endif
 #if ENABLE_SHADOW_REALM
 					if (e->second.in_shadow_realm)
 					{
@@ -1779,7 +1761,6 @@ int main(int argc, const char** argv)
 					}
 #endif
 				}
-#endif
 				if (sr.hasMore())
 				{
 					std::cout << addr.toString() << " - Game invite but there's more: " << string::bin2hex(data) << std::endl;
@@ -1998,7 +1979,7 @@ int main(int argc, const char** argv)
 						// No session info json provided
 					}*/
 
-#if USERNAMES
+#if REQUEST_INTRODUCTION
 					std::string hostName;
 					if (size_t pos = message.find(R"("hostName":)"); pos != std::string::npos)
 					{
@@ -2025,6 +2006,8 @@ int main(int argc, const char** argv)
 							}
 						}
 					}
+#else
+					std::cout << addr.toString() << " - Unexpected traffic: " << string::bin2hex(data) << std::endl;
 #endif
 				}
 				else
@@ -2428,13 +2411,11 @@ int main(int argc, const char** argv)
 					obj.add("local_port_server", e->second.local_port_server);
 					obj.add("status", e->second.status);
 					obj.add("presence", e->second.presence);
-#if USERNAMES
 					// Data available via SNS and conditionally via P2P
 					if (!e->second.username.empty())
 					{
 						obj.add("username", e->second.username);
 					}
-#endif
 				}
 			}
 #if MULTI_NRS
@@ -2494,12 +2475,10 @@ int main(int argc, const char** argv)
 					if (!from_e->second.presence.empty())
 					{
 						std::string username = from_id.toString();
-#if USERNAMES
 						if (!from_e->second.username.empty())
 						{
 							username = from_e->second.username;
 						}
-#endif
 						if (auto to_e = account_map.find(to_id); to_e != account_map.end())
 						{
 							to_e->second.sendGameInvite(*nrs_socket, from_id, to_id, from_e->second.presence, username, from_e->second.status);
