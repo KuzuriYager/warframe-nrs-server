@@ -2363,8 +2363,8 @@ int main(int argc, const char** argv)
 				"- /api/stats\r\n"
 				"- /api/me\r\n"
 				"- /api/me/accounts\r\n"
-				"- /api/me/proxies\r\n"
 				"- /api/account/:id\r\n"
+				"- /api/account/:id/proxies (same IP only)\r\n"
 				"- /api/session/:id\r\n"
 				"- /api/invite/:from/:to\r\n"
 			);
@@ -2419,73 +2419,88 @@ int main(int argc, const char** argv)
 			}
 			ServerWebService::sendText(s, arr.encodePretty());
 		}
-		else if (req.path == "/api/me/proxies")
-		{
-			const auto reflexive_ip = s.peer.ip.getV4();
-			JsonArray arr;
-#if MAX_PROXY_CONNECTIONS > 0
-			for (const auto& proxy : proxies)
-			{
-				if ((proxy.left_ip == reflexive_ip || proxy.right_ip == reflexive_ip) && proxy.isActive())
-				{
-					JsonObject& obj = arr.children.emplace_back(soup::make_unique<JsonObject>())->reinterpretAsObj();
-					obj.add("left_id", proxy.left_id.toString());
-					obj.add("left_is_server", proxy.left_is_server);
-					if (proxy.left_port != 0)
-					{
-						obj.add("left_ip", Endianness::toNative(proxy.left_ip));
-						obj.add("left_port", Endianness::toNative(proxy.left_port));
-					}
-					obj.add("right_id", proxy.right_id.toString());
-					obj.add("right_is_server", proxy.right_is_server);
-					if (proxy.right_port != 0)
-					{
-						obj.add("right_ip", Endianness::toNative(proxy.right_ip));
-						obj.add("right_port", Endianness::toNative(proxy.right_port));
-					}
-					obj.add("port", Endianness::toNative(proxy.port));
-					obj.add("last_traffic", proxy.last_traffic);
-				}
-			}
-#endif
-			ServerWebService::sendText(s, arr.encodePretty());
-		}
 		else if (req.path.substr(0, 13) == "/api/account/")
 		{
-			JsonObject obj;
-			const MongoId acctId = string::hex2bin(req.path.substr(13));
+			const MongoId acctId = string::hex2bin(req.path.substr(13, 24));
 			if (auto e = account_map.find(acctId); e != account_map.end())
 			{
 				if (e->second.isActive())
 				{
-					// Data available via NRS
-					obj.add("reflexive_ip", e->second.reflexive_ip);
-					obj.add("reflexive_port_client", e->second.reflexive_port_client);
-					obj.add("reflexive_port_server", e->second.reflexive_port_server);
-					obj.add("local_ip", e->second.local_ip);
-					obj.add("local_port_client", e->second.local_port_client);
-					obj.add("local_port_server", e->second.local_port_server);
-					obj.add("status", e->second.status);
-					obj.add("presence", e->second.presence);
-					// Data available via SNS and conditionally via P2P
-					if (!e->second.username.empty())
+					if (req.path.size() == 13 + 24)
 					{
-						obj.add("username", e->second.username);
+						JsonObject obj;
+						// Data available via NRS
+						obj.add("reflexive_ip", e->second.reflexive_ip);
+						obj.add("reflexive_port_client", e->second.reflexive_port_client);
+						obj.add("reflexive_port_server", e->second.reflexive_port_server);
+						obj.add("local_ip", e->second.local_ip);
+						obj.add("local_port_client", e->second.local_port_client);
+						obj.add("local_port_server", e->second.local_port_server);
+						obj.add("status", e->second.status);
+						obj.add("presence", e->second.presence);
+						// Data available via SNS and conditionally via P2P
+						if (!e->second.username.empty())
+						{
+							obj.add("username", e->second.username);
+						}
+						if (e->second.buildId != 0)
+						{
+							obj.add("buildId", e->second.buildId);
+						}
+						ServerWebService::sendText(s, obj.encodePretty());
 					}
-					if (e->second.buildId != 0)
+					else if (req.path.substr(13 + 24) == "/proxies")
 					{
-						obj.add("buildId", e->second.buildId);
+						if (s.peer.ip.getV4NativeEndian() == e->second.reflexive_ip)
+						{
+							JsonArray arr;
+#if MAX_PROXY_CONNECTIONS > 0
+							for (const auto& proxy : proxies)
+							{
+								if (proxy.isActive() && (proxy.left_id == acctId || proxy.right_id == acctId))
+								{
+									JsonObject& obj = arr.children.emplace_back(soup::make_unique<JsonObject>())->reinterpretAsObj();
+									obj.add("left_id", proxy.left_id.toString());
+									obj.add("left_is_server", proxy.left_is_server);
+									if (proxy.left_port != 0)
+									{
+										obj.add("left_ip", Endianness::toNative(proxy.left_ip));
+										obj.add("left_port", Endianness::toNative(proxy.left_port));
+									}
+									obj.add("right_id", proxy.right_id.toString());
+									obj.add("right_is_server", proxy.right_is_server);
+									if (proxy.right_port != 0)
+									{
+										obj.add("right_ip", Endianness::toNative(proxy.right_ip));
+										obj.add("right_port", Endianness::toNative(proxy.right_port));
+									}
+									obj.add("port", Endianness::toNative(proxy.port));
+									obj.add("last_traffic", proxy.last_traffic);
+								}
+							}
+#endif
+							ServerWebService::sendText(s, arr.encodePretty());
+						}
+						else
+						{
+							ServerWebService::sendText(s, "request must be sent from the account's IP address");
+						}
 					}
+					else
+					{
+						ServerWebService::sendText(s, "bad request");
+					}
+					return;
 				}
 			}
 #if MULTI_NRS
 			if (auto e = remote_account_map.find(acctId); e != remote_account_map.end())
 			{
-				ServerWebService::sendRedirect(s, "http://" + get_servers()[e->second].toString() + "/api/account/" + acctId.toString());
+				ServerWebService::sendRedirect(s, "http://" + get_servers()[e->second].toString() + req.path);
 				return;
 			}
 #endif
-			ServerWebService::sendText(s, obj.encodePretty());
+			ServerWebService::sendText(s, "unknown account id");
 		}
 		else if (req.path.substr(0, 13) == "/api/session/")
 		{
