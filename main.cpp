@@ -578,9 +578,9 @@ struct AccountResolveResponse
 			uint16_t masked_reflexive_port = reflexive_port ^ 0xAAAA;
 			uint16_t masked_local_port = local_port ^ 0xAAAA;
 			sw.u32_be(masked_reflexive_ip);
-			sw.u16_be(masked_reflexive_port);
+			sw.u16_le(masked_reflexive_port);
 			sw.u32_be(masked_local_ip);
-			sw.u16_be(masked_local_port);
+			sw.u16_le(masked_local_port);
 		}
 		else
 		{
@@ -1523,14 +1523,14 @@ int main(int argc, const char** argv)
 #endif
 									{
 #if FORCE_PROXY_CONNECTIONS
-										r.reflexive_ip = e->second.reflexive_ip;
-										r.local_ip = e->second.local_ip;
-#else
 										r.reflexive_ip = SOUP_IPV4(10, 0, 0, 0);
 										r.local_ip = SOUP_IPV4(10, 0, 0, 0);
+#else
+										r.reflexive_ip = e->second.reflexive_ip;
+										r.local_ip = e->second.local_ip;
 #endif
-										r.reflexive_port = ((packet_id & 0x20) ? e->second.reflexive_port_server : e->second.reflexive_port_client) ^ 0xAAAA;
-										r.local_port = ((packet_id & 0x20) ? e->second.local_port_server : e->second.local_port_client) ^ 0xAAAA;
+										r.reflexive_port = ((packet_id & 0x20) ? e->second.reflexive_port_server : e->second.reflexive_port_client);
+										r.local_port = ((packet_id & 0x20) ? e->second.local_port_server : e->second.local_port_client);
 									}
 									continue;
 								}
@@ -2252,14 +2252,14 @@ int main(int argc, const char** argv)
 #endif
 										{
 #if FORCE_PROXY_CONNECTIONS
-											r.reflexive_ip = e->second.reflexive_ip;
-											r.local_ip = e->second.local_ip;
-#else
 											r.reflexive_ip = SOUP_IPV4(10, 0, 0, 0);
 											r.local_ip = SOUP_IPV4(10, 0, 0, 0);
+#else
+											r.reflexive_ip = e->second.reflexive_ip;
+											r.local_ip = e->second.local_ip;
 #endif
-											r.reflexive_port = ((c & 0x20) ? e->second.reflexive_port_server : e->second.reflexive_port_client) ^ 0xAAAA;
-											r.local_port = ((c & 0x20) ? e->second.local_port_server : e->second.local_port_client) ^ 0xAAAA;
+											r.reflexive_port = ((c & 0x20) ? e->second.reflexive_port_server : e->second.reflexive_port_client);
+											r.local_port = ((c & 0x20) ? e->second.local_port_server : e->second.local_port_client);
 										}
 									}
 									else
