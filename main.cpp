@@ -557,15 +557,10 @@ struct AccountResolveResponse
 			if (reflexive_ip != 0)
 			{
 #if MULTI_NRS
-				if (bindingServerId != THIS_SERVER_ID)
-				{
-					uint8_t b = 0x80 | (bindingServerId + 1); sw.u8(b);
-				}
-				else
+				{ uint8_t b = 0x80 | (bindingServerId + 1); sw.u8(b); }
+#else
+				{ uint8_t b = 0x81; sw.u8(b); }
 #endif
-				{
-					uint8_t b = 0x81; sw.u8(b);
-				}
 			_write_masked_ips:
 				uint32_t masked_reflexive_ip = reflexive_ip ^ 0xAAAAAAAA;
 				uint32_t masked_local_ip = local_ip ^ 0xAAAAAAAA;
