@@ -20,6 +20,9 @@
 
 #define ENABLE_HTTP true
 
+// If a motd.txt exists, send it to users after first binding via an invite.
+#define ENABLE_MOTD true
+
 // Opportunistically ask clients for an introduction in an attempt to grab their username and buildId.
 #define REQUEST_INTRODUCTION true
 
@@ -374,6 +377,9 @@ struct AccountData
 	bool is_dtls;
 #if ENABLE_SHADOW_REALM
 	bool in_shadow_realm = false;
+#endif
+#if ENABLE_MOTD
+	bool sent_motd = false;
 #endif
 
 	uint8_t status; // presence state
@@ -1330,7 +1336,17 @@ int main(int argc, const char** argv)
 #endif
 					}
 
-					//data->sendGameInvite(s, acctId, acctId, R"({})", "Welcome :)", 0);
+#if ENABLE_MOTD
+					if (!data->sent_motd)
+					{
+						if (auto motd = string::fromFile("motd.txt"); !motd.empty())
+						{
+							motd.append(3, '\0');
+							data->sendGameInvite(s, acctId, acctId, R"({})", motd, 0);
+							data->sent_motd = true;
+						}
+					}
+#endif
 				}
 				else
 				{
