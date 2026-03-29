@@ -35,6 +35,9 @@
 /*#if IS_LAN_DEPLOYMENT
 #include <dhcp.hpp>
 #endif*/
+#if MULTI_NRS
+#include <dnsResolver.hpp>
+#endif
 #if ENABLE_HTTP
 #include <HttpRequest.hpp>
 #endif
@@ -442,13 +445,47 @@ static SharedPtr<Socket> nrs_socket;
 #if MULTI_NRS
 static std::unordered_map<MongoId, uint8_t> remote_account_map; // <account id, binding server id>
 
+#if ENABLE_HTTP
+static std::vector<std::string> get_servers_for_http_impl()
+{
+	const std::vector<const char*> strs = SERVERS;
+	std::vector<std::string> hostnames;
+	hostnames.reserve(strs.size());
+	for (uint8_t i = 0; i != strs.size(); ++i)
+	{
+		std::string& hostname = hostnames.emplace_back(strs[i]);
+		if (hostname.find(':') == std::string::npos)
+		{
+			hostname.append(":4950");
+		}
+	}
+	return hostnames;
+}
+
+static const std::vector<std::string>& get_servers_for_http()
+{
+	static const std::vector<std::string> servers = get_servers_for_http_impl();
+	return servers;
+}
+#endif
+
 static std::vector<SocketAddr> get_servers_impl()
 {
 	const std::vector<const char*> strs = SERVERS;
 	std::vector<SocketAddr> addrs;
 	addrs.reserve(strs.size());
+	auto resolver = dnsResolver::makeDefault();
 	for (uint8_t i = 0; i != strs.size(); ++i)
 	{
+		if (strchr(strs[i], ':') == nullptr)
+		{
+			const auto ips = resolver->lookupIPv4(strs[i]);
+			if (!ips.empty())
+			{
+				addrs.emplace_back(ips[0], (native_u16_t)4950);
+				continue;
+			}
+		}
 		addrs.emplace_back().fromString(strs[i]);
 	}
 	return addrs;
@@ -2641,7 +2678,7 @@ int main(int argc, const char** argv)
 #if MULTI_NRS
 			if (auto e = remote_account_map.find(acctId); e != remote_account_map.end())
 			{
-				ServerWebService::sendRedirect(s, "http://" + get_servers()[e->second].toString() + req.path);
+				ServerWebService::sendRedirect(s, "http://" + get_servers_for_http()[e->second] + req.path);
 				return;
 			}
 #endif
@@ -2725,7 +2762,7 @@ int main(int argc, const char** argv)
 #if MULTI_NRS
 				if (auto e = remote_account_map.find(from_id); e != remote_account_map.end())
 				{
-					ServerWebService::sendRedirect(s, "http://" + get_servers()[e->second].toString() + "/api/invite/" + from_id.toString() + "/" + to_id.toString());
+					ServerWebService::sendRedirect(s, "http://" + get_servers_for_http()[e->second] + "/api/invite/" + from_id.toString() + "/" + to_id.toString());
 					return;
 				}
 #endif
