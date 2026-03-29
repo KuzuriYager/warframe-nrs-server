@@ -233,7 +233,7 @@ static std::string packData(const std::string& data, const std::string_view& sal
 #endif
 }
 
-static bool unpackData(const SocketAddr& addr, MemoryRefReader& sr, std::string& data, network_u16_t proxy_port = 0)
+static bool unpackData(const SocketAddr& addr, MemoryRefReader& sr, std::string& data/*, network_u16_t proxy_port = 0*/)
 {
 	uint8_t unk_byte;
 	sr.u8(unk_byte);
@@ -256,10 +256,10 @@ static bool unpackData(const SocketAddr& addr, MemoryRefReader& sr, std::string&
 		if (decompressed_size != expected_decompressed_size)
 		{
 			std::cout << addr.toString();
-			if (proxy_port)
+			/*if (proxy_port)
 			{
 				std::cout << " to proxy port " << Endianness::toNative(proxy_port);
-			}
+			}*/
 			std::cout << " - Decompressed size mismatch (got " << decompressed_size << ", expected " << expected_decompressed_size << "): " << string::bin2hex(data) << std::endl;
 			return false;
 		}
@@ -751,11 +751,15 @@ struct Proxy : public ServerServiceUdp
 
 		SOUP_IF_UNLIKELY (left_port == 0 || right_port == 0) // Setup phase?
 		{
-			MemoryRefReader sr(data);
+			// I think it's rather unlikely that someone's account id can be LZF-compressed away,
+			// and the problem if we decompress the data now is that we can't cleanly forward it anymore.
+
+			/*MemoryRefReader sr(data);
 			SOUP_IF_UNLIKELY (!unpackData(addr, sr, data, this->port))
 			{
 				return;
-			}
+			}*/
+
 			auto left_id_pos = data.find((const char*)left_id.ints, 0, 12);
 			if (left_id_pos == std::string::npos)
 			{
