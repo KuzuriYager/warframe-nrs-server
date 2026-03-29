@@ -583,6 +583,7 @@ struct AccountResolveResponse
 	uint16_t local_port = 0;
 #if MULTI_NRS
 	uint8_t bindingServerId = THIS_SERVER_ID;
+	bool unresolved = false;
 #endif
 
 	void write(StringWriter& sw, const std::string_view& salt)
@@ -635,11 +636,6 @@ struct AccountResolveResponse
 	}
 
 #if MULTI_NRS
-	bool hasUnresolvedRedirect()
-	{
-		return reflexive_ip == 0 && bindingServerId != THIS_SERVER_ID;
-	}
-
 	template <typename T>
 	bool custom_io(T& s)
 	{
@@ -649,6 +645,7 @@ struct AccountResolveResponse
 			&& s.u16_le(reflexive_port)
 			&& s.u16_le(local_port)
 			&& s.u8(bindingServerId)
+			&& s.b(unresolved)
 			;
 	}
 #endif
@@ -1590,6 +1587,7 @@ int main(int argc, const char** argv)
 							if (auto e = remote_account_map.find(r.account_id); e != remote_account_map.end())
 							{
 								r.bindingServerId = e->second;
+								r.unresolved = true;
 							}
 #endif
 						}
@@ -1603,7 +1601,7 @@ int main(int argc, const char** argv)
 				{
 					for (auto& r : rr.results)
 					{
-						if (r.hasUnresolvedRedirect())
+						if (r.unresolved)
 						{
 							StringWriter sw;
 							sw.u8(packet_id);
@@ -2320,11 +2318,15 @@ int main(int argc, const char** argv)
 										erase_account(e);
 									}
 								}
+								if (r.bindingServerId == THIS_SERVER_ID)
+								{
+									r.unresolved = false;
+								}
 							}
 
 							for (auto& r : rr.results)
 							{
-								if (r.hasUnresolvedRedirect())
+								if (r.unresolved)
 								{
 									StringWriter sw;
 									sw.u8(packet_id);
