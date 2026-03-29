@@ -544,47 +544,61 @@ struct AccountResolveResponse
 	uint32_t local_ip = 0;
 	uint16_t reflexive_port = 0;
 	uint16_t local_port = 0;
+#if MULTI_NRS
 	uint8_t bindingServerId = THIS_SERVER_ID;
+#endif
 
 	void write(StringWriter& sw, const std::string_view& salt)
 	{
 		account_id.io(sw);
-		if (reflexive_ip != 0)
+
+		if (!is_u32_or_below(salt))
 		{
-			if (bindingServerId != THIS_SERVER_ID)
+			if (reflexive_ip != 0)
 			{
-				if (!is_u32_or_below(salt))
+#if MULTI_NRS
+				if (bindingServerId != THIS_SERVER_ID)
 				{
 					uint8_t b = 0x80 | (bindingServerId + 1); sw.u8(b);
 				}
 				else
-				{
-					uint8_t b = ~bindingServerId; sw.u8(b);
-				}
-			}
-			else
-			{
-				if (!is_u32_or_below(salt))
+#endif
 				{
 					uint8_t b = 0x81; sw.u8(b);
 				}
-				else
-				{
-					uint8_t b = 4; sw.u8(b);
-				}
+			_write_masked_ips:
+				uint32_t masked_reflexive_ip = reflexive_ip ^ 0xAAAAAAAA;
+				uint32_t masked_local_ip = local_ip ^ 0xAAAAAAAA;
+				uint16_t masked_reflexive_port = reflexive_port ^ 0xAAAA;
+				uint16_t masked_local_port = local_port ^ 0xAAAA;
+				sw.u32_be(masked_reflexive_ip);
+				sw.u16_le(masked_reflexive_port);
+				sw.u32_be(masked_local_ip);
+				sw.u16_le(masked_local_port);
 			}
-			uint32_t masked_reflexive_ip = reflexive_ip ^ 0xAAAAAAAA;
-			uint32_t masked_local_ip = local_ip ^ 0xAAAAAAAA;
-			uint16_t masked_reflexive_port = reflexive_port ^ 0xAAAA;
-			uint16_t masked_local_port = local_port ^ 0xAAAA;
-			sw.u32_be(masked_reflexive_ip);
-			sw.u16_le(masked_reflexive_port);
-			sw.u32_be(masked_local_ip);
-			sw.u16_le(masked_local_port);
+			else
+			{
+				uint8_t b = 0; sw.u8(b);
+			}
 		}
 		else
 		{
-			uint8_t b = 0; sw.u8(b);
+#if MULTI_NRS
+			if (bindingServerId != THIS_SERVER_ID)
+			{
+				uint8_t b = ~bindingServerId; sw.u8(b);
+			}
+			else
+#endif
+			if (reflexive_ip != 0)
+			{
+				uint8_t b = 4; sw.u8(b);
+				goto _write_masked_ips;
+			}
+			else
+			{
+				uint8_t b = 0; sw.u8(b);
+			}
 		}
 	}
 
@@ -1549,21 +1563,24 @@ int main(int argc, const char** argv)
 #endif
 
 #if MULTI_NRS
-				for (auto& r : rr.results)
+				if (!is_u32_or_below(salt))
 				{
-					if (r.hasUnresolvedRedirect())
+					for (auto& r : rr.results)
 					{
-						StringWriter sw;
-						sw.u8(packet_id);
-						{ uint8_t origin_bindingServerId = THIS_SERVER_ID; sw.u8(origin_bindingServerId); }
+						if (r.hasUnresolvedRedirect())
+						{
+							StringWriter sw;
+							sw.u8(packet_id);
+							{ uint8_t origin_bindingServerId = THIS_SERVER_ID; sw.u8(origin_bindingServerId); }
 
-						acctId.io(sw);
-						{ network_u32_t reply_ip = addr.ip.getV4(); sw.u32_le(reply_ip); }
-						{ network_u16_t reply_port = addr.port; sw.u16_le(reply_port); }
+							acctId.io(sw);
+							{ network_u32_t reply_ip = addr.ip.getV4(); sw.u32_le(reply_ip); }
+							{ network_u16_t reply_port = addr.port; sw.u16_le(reply_port); }
 
-						rr.custom_io(sw);
-						send_custom_message(r.bindingServerId, std::move(sw.data));
-						return;
+							rr.custom_io(sw);
+							send_custom_message(r.bindingServerId, std::move(sw.data));
+							return;
+						}
 					}
 				}
 #endif
