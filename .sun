@@ -13,3 +13,8 @@ arg -DIS_LAN_DEPLOYMENT=true
 # arg -DUSE_DTLSBRIDGE=true
 # linker_arg -L.
 # linker_arg -lDTLSBridge
+
+## Uncomment for multiple binding servers
+# arg -DMULTI_NRS=true
+# arg -DSERVERS={"10.0.0.0:1234","nrs2.local"}
+# arg -DTHIS_SERVER_ID=0

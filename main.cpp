@@ -23,8 +23,6 @@
 // Opportunistically ask clients for an introduction in an attempt to grab their username and buildId.
 #define REQUEST_INTRODUCTION true
 
-#define MULTI_NRS false
-#define SERVERS { /* Same array as "NRS" in login response */ }
 #ifndef THIS_SERVER_ID
 	#define THIS_SERVER_ID 0
 #endif
