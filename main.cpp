@@ -2351,7 +2351,10 @@ int main(int argc, const char** argv)
 									sw.u16_le(reply_port);
 
 									rr.custom_io(sw);
-									send_custom_message(r.bindingServerId, std::move(sw.data));
+									if (r.bindingServerId < get_servers().size())
+									{
+										send_custom_message(r.bindingServerId, std::move(sw.data));
+									}
 									return;
 								}
 							}
@@ -2362,7 +2365,10 @@ int main(int argc, const char** argv)
 							sw.u32_le(reply_ip);
 							sw.u16_le(reply_port);
 							rr.custom_io(sw);
-							send_custom_message(origin_bindingServerId, std::move(sw.data));
+							if (origin_bindingServerId < get_servers().size())
+							{
+								send_custom_message(origin_bindingServerId, std::move(sw.data));
+							}
 						}
 						break;
 
