@@ -2577,6 +2577,9 @@ int main(int argc, const char** argv)
 				obj.add("allocated_accounts", allocated_accounts);
 				obj.add("active_accounts", active_accounts);
 			}
+#if MULTI_NRS
+			obj.add("remote_accounts", (intptr_t)remote_account_map.size());
+#endif
 #if MAX_PROXY_CONNECTIONS > 0
 			{
 				uint32_t active_proxies = 0;
