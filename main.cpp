@@ -78,6 +78,7 @@ extern "C"
 	bool ReadData(uint8_t* inputData, size_t inputDataLength, uint8_t* pendingSendBuffer, size_t* pendingSendLength, uint8_t decryptedDataBuffer[4096], size_t* decryptedDataLength, const char* endpoint);
 	void WriteData(const uint8_t* rawData, size_t rawDataLength, uint8_t* encryptedData, size_t* encryptedDataLength, const char* endpoint);
 	void init();
+	void deinit();
 }
 #endif
 
@@ -2794,6 +2795,13 @@ int main(int argc, const char** argv)
 			}
 			ServerWebService::sendText(s, "false");
 		}
+#if !DEPLOYMENT
+		else if (req.path == "/api/exit")
+		{
+			ServerWebService::sendText(s, "ok");
+			throw 0;
+		}
+#endif
 		else
 		{
 			ServerWebService::send404(s);
@@ -2821,5 +2829,21 @@ int main(int argc, const char** argv)
 	signal(SIGTERM, [](int) { exit(0); });
 #endif
 
+#if DEPLOYMENT
 	serv.run();
+	SOUP_UNREACHABLE;
+#else
+	try
+	{
+		serv.run();
+	}
+	catch (const int&)
+	{
+		// Got /api/exit request
+	}
+  #if USE_DTLSBRIDGE
+	deinit();
+  #endif
+	return 0;
+#endif
 }
