@@ -21,7 +21,9 @@
 #define ENABLE_HTTP true
 
 // If a motd.txt exists, send it to users after first binding via an invite.
-#define ENABLE_MOTD true
+#ifndef ENABLE_MOTD
+	#define ENABLE_MOTD false
+#endif
 
 // Opportunistically ask clients for an introduction in an attempt to grab their username and buildId.
 #define REQUEST_INTRODUCTION true
