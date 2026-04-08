@@ -25,6 +25,13 @@
 
 // Opportunistically ask clients for an introduction in an attempt to grab their username and buildId.
 #define REQUEST_INTRODUCTION true
+#ifndef INTRODUCTION_PORT
+	#if DEPLOYMENT
+		#define INTRODUCTION_PORT 4955
+	#else
+		#define INTRODUCTION_PORT 1235
+	#endif
+#endif
 
 #ifndef THIS_SERVER_ID
 	#define THIS_SERVER_ID 0
@@ -364,6 +371,13 @@ namespace std
 	};
 }
 
+enum NatBehaviour : uint8_t
+{
+	NAT_UNK,
+	NAT_TRANSPARENT,
+	NAT_STRICT,
+};
+
 struct AccountData
 {
 	native_u32_t reflexive_ip;
@@ -381,6 +395,9 @@ struct AccountData
 #endif
 #if ENABLE_MOTD
 	bool sent_motd = false;
+#endif
+#if REQUEST_INTRODUCTION
+	NatBehaviour nat_behaviour = NAT_UNK;
 #endif
 
 	uint8_t status; // presence state
@@ -1092,17 +1109,16 @@ int main(int argc, const char** argv)
 		}
 		//std::cout << addr.toString() << " - salt = " << salt << std::endl;
 
-		uint8_t packet_id;
-		sr.u8(packet_id);
-
 #if DEPLOYMENT
-		if (!is_dtls && !is_u32_or_below(salt) && packet_id != 0)
+		if (!is_dtls && !is_u32_or_below(salt))
 		{
 			std::cout << addr.toString() << " - Ignoring cleartext traffic from a post-DTLS version: " << string::bin2hex(data) << std::endl;
 			return;
 		}
 #endif
 
+		uint8_t packet_id;
+		sr.u8(packet_id);
 		switch (packet_id)
 		{
 		case 0x54: // Test from client
@@ -1410,17 +1426,13 @@ int main(int argc, const char** argv)
 					}
 				}
 #if REQUEST_INTRODUCTION
-				if ((data->buildId == 0 || data->username.empty())
+				if ((data->nat_behaviour == NAT_UNK || data->buildId == 0 || data->username.empty())
 					&& data->presence.find("\"hid\":\"" + acctId.toString()) != std::string::npos
 					)
 				{
-					for (const uint16_t& port : PORTS)
-					{
-						MongoId sender;
-						memset(sender.ints, 0x33, 12);
-						send_introduction(s, sender, acctId, SocketAddr(this_machine_ip, (native_u16_t)port), SocketAddr(data->reflexive_ip, data->reflexive_port_server), IT_FROM_PEER, 69, salt, is_dtls);
-						break;
-					}
+					MongoId sender;
+					memset(sender.ints, 0x33, 12);
+					send_introduction(s, sender, acctId, SocketAddr(this_machine_ip, (native_u16_t)INTRODUCTION_PORT), SocketAddr(data->reflexive_ip, data->reflexive_port_server), IT_FROM_PEER, 69, salt, is_dtls);
 				}
 #endif
 			}
@@ -2148,65 +2160,7 @@ int main(int argc, const char** argv)
 				std::string message = data.substr(sr.getPosition());
 				if (message.size() > 3 && message[0] == 0 && message[1] == 0 && (uint8_t)message[2] == (uint8_t)0x80)
 				{
-					// P2P introduction
-					// 00000080 15 02 74 <taskId> <platformFamily?> <acctId> <str:sessionInfoJson>
-
-					/*size_t pos = message.rfind("{\""); // JSON is not nested afaict, so this should be a good way to find the start.
-					if (pos != std::string::npos)
-					{
-						std::cout << addr.toString() << " - Coaxed into providing more information: " << message.substr(pos) << std::endl;
-					}
-					else
-					{
-						// No session info json provided
-					}*/
-
-#if REQUEST_INTRODUCTION
-					std::string hostName;
-					int64_t buildId = 0;
-					if (size_t pos = message.find(R"("hostName":)"); pos != std::string::npos)
-					{
-						pos += 11;
-						if (auto j = json::decode(message.data() + pos, message.size() - pos); j && j->isStr())
-						{
-							hostName = std::move(j->reinterpretAsStr().value);
-						}
-					}
-					if (size_t pos = message.find(R"("buildId":)"); pos != std::string::npos)
-					{
-						pos += 10;
-						if (auto j = json::decode(message.data() + pos, message.size() - pos); j && j->isInt())
-						{
-							buildId = j->reinterpretAsInt();
-						}
-					}
-					if (!hostName.empty() || buildId != 0)
-					{
-						if (size_t pos = message.find(R"("hostId":)"); pos != std::string::npos)
-						{
-							pos += 9;
-							if (auto j = json::decode(message.data() + pos, message.size() - pos); j && j->isStr())
-							{
-								std::string hostId = string::hex2bin(j->reinterpretAsStr().value);
-								if (auto e = account_map.find(hostId); e != account_map.end())
-								{
-									if (!hostName.empty())
-									{
-										// TODO: Sanitise platform suffix so terminal doesn't get polluted?
-										//std::cout << addr.toString() << " - Provided username for " << j->reinterpretAsStr().value << ": " << hostName << std::endl;
-										e->second.username = std::move(hostName);
-									}
-									if (buildId != 0)
-									{
-										e->second.buildId = buildId;
-									}
-								}
-							}
-						}
-					}
-#else
 					std::cout << addr.toString() << " - Unexpected traffic: " << string::bin2hex(data) << std::endl;
-#endif
 				}
 				else
 				{
@@ -2506,6 +2460,79 @@ int main(int argc, const char** argv)
 		std::cout << "Bound UDP/" << port << std::endl;
 	}
 
+#if REQUEST_INTRODUCTION
+	ServerServiceUdp introduction_srv([](Socket& s, SocketAddr&& addr, std::string&& data, ServerServiceUdp&)
+	{
+		MemoryRefReader sr(data);
+		SOUP_IF_UNLIKELY (!unpackData(addr, sr, data))
+		{
+			return;
+		}
+
+		//std::cout << addr.toString() << " - Traffic on introduction port: " << string::bin2hex(data) << std::endl;
+
+		// P2P introduction
+		// 00000080 15 02 74 <taskId> <platformFamily?> <acctId> <str:sessionInfoJson>
+
+		/*size_t pos = data.rfind("{\""); // JSON is not nested afaict, so this should be a good way to find the start.
+		if (pos != std::string::npos)
+		{
+			std::cout << addr.toString() << " - Coaxed into providing more information: " << data.substr(pos) << std::endl;
+		}
+		else
+		{
+			// No session info json provided
+		}*/
+
+		std::string hostName;
+		int64_t buildId = 0;
+		if (size_t pos = data.find(R"("hostName":)"); pos != std::string::npos)
+		{
+			pos += 11;
+			if (auto j = json::decode(data.data() + pos, data.size() - pos); j && j->isStr())
+			{
+				hostName = std::move(j->reinterpretAsStr().value);
+			}
+		}
+		if (size_t pos = data.find(R"("buildId":)"); pos != std::string::npos)
+		{
+			pos += 10;
+			if (auto j = json::decode(data.data() + pos, data.size() - pos); j && j->isInt())
+			{
+				buildId = j->reinterpretAsInt();
+			}
+		}
+		if (size_t pos = data.find(R"("hostId":)"); pos != std::string::npos)
+		{
+			pos += 9;
+			if (auto j = json::decode(data.data() + pos, data.size() - pos); j && j->isStr())
+			{
+				std::string hostId = string::hex2bin(j->reinterpretAsStr().value);
+				if (auto e = account_map.find(hostId); e != account_map.end())
+				{
+					e->second.nat_behaviour = (e->second.reflexive_port_server == addr.getPort()) ? NAT_TRANSPARENT : NAT_STRICT;
+					if (!hostName.empty())
+					{
+						// TODO: Sanitise platform suffix so terminal doesn't get polluted?
+						//std::cout << addr.toString() << " - Provided username for " << j->reinterpretAsStr().value << ": " << hostName << std::endl;
+						e->second.username = std::move(hostName);
+					}
+					if (buildId != 0)
+					{
+						e->second.buildId = buildId;
+					}
+				}
+			}
+		}
+	});
+	if (!serv.bindUdp(bind_addr, INTRODUCTION_PORT, &introduction_srv))
+	{
+		std::cout << "Failed to bind UDP/" << INTRODUCTION_PORT << std::endl;
+		return 1;
+	}
+	std::cout << "Bound UDP/" << INTRODUCTION_PORT << std::endl;
+#endif
+
 #if MAX_PROXY_CONNECTIONS > 0
 	uint16_t port = 4200;
 	for (auto& proxy : proxies)
@@ -2647,6 +2674,10 @@ int main(int argc, const char** argv)
 						obj.add("status", e->second.status);
 						obj.add("presence", e->second.presence);
 						// Data available via SNS and conditionally via P2P
+						if (e->second.nat_behaviour != NAT_UNK)
+						{
+							obj.add("strict_nat", e->second.nat_behaviour == NAT_STRICT);
+						}
 						if (!e->second.username.empty())
 						{
 							obj.add("username", e->second.username);
