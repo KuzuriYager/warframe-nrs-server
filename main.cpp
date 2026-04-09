@@ -143,13 +143,19 @@ static bool is_u15_14_or_below(const std::string_view& salt)
 		;
 }
 
-static bool is_u27_or_below(const std::string_view& salt)
+static bool is_u26_or_below(const std::string_view& salt)
 {
-	return salt == "b471e49539930dc9b5a131e6247c7387D"
-		|| salt == "b471e49539930dc9b5a131e6247c7387B"
+	return salt == "b471e49539930dc9b5a131e6247c7387B"
 		|| salt == "b471e49539930dc9b5a131e6247c7387A"
 		|| salt == "6f7fd17e0eb641abQ"
 		|| is_u15_14_or_below(salt)
+		;
+}
+
+static bool is_u27_or_below(const std::string_view& salt)
+{
+	return salt == "b471e49539930dc9b5a131e6247c7387D"
+		|| is_u26_or_below(salt)
 		;
 }
 
@@ -614,7 +620,7 @@ struct AccountResolveResponse
 	{
 		account_id.io(sw);
 
-		if (!is_u32_or_below(salt))
+		if (!is_u26_or_below(salt)) // >= U27
 		{
 			if (reflexive_ip != 0)
 			{
@@ -1383,7 +1389,7 @@ int main(int argc, const char** argv)
 					if (!is_u15_or_below(salt))
 					{
 						{ uint8_t b = (MAX_PROXY_CONNECTIONS > 0 ? 1 : 0); sw.u8(b); } // 0 = no proxying, 1 = yes proxying
-						if (!is_u27_or_below(salt)) // 2022.04.29.12.53 (~ U31.5) crashes when this field is not given.
+						if (!is_u26_or_below(salt)) // 2019.12.13.15.04 (~ U27) and 2022.04.29.12.53 (~ U31.5) crash when this field is not given.
 						{
 							{ uint8_t b = (packet_id == 0x42 ? 1 : 0); sw.u8(b); }
 						}
@@ -1487,8 +1493,9 @@ int main(int argc, const char** argv)
 		case 0x50: // Rich presence query
 			if (!is_u10_or_below(salt)) // >= U11
 			{
-				MongoId acctId;
-				acctId.io(sr);
+				/*MongoId acctId;
+				acctId.io(sr);*/
+				sr.skip(12); // acctId
 				if (is_u11_or_below(salt))
 				{
 					sr.skip(64); // NatHash
@@ -1531,11 +1538,11 @@ int main(int argc, const char** argv)
 					{
 						uint8_t b = 0; sw.u8(b);
 					}
-					if (packet_id == 0x50)
+					/*if (packet_id == 0x50) // U27 crashes if this is given for an offline player. Newer versions I think do a fast presence query first so probably won't hit this case anyway.
 					{
 						std::string str;
 						ser_str(sw, salt, str);
-					}
+					}*/
 				}
 				udp_send(s, addr, packData(sw.data, salt), is_dtls);
 
