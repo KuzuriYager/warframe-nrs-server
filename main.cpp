@@ -143,12 +143,19 @@ static bool is_u15_14_or_below(const std::string_view& salt)
 		;
 }
 
+static bool is_u16_or_below(const std::string_view& salt)
+{
+	return salt == "6f7fd17e0eb641abP"
+		|| is_u15_14_or_below(salt)
+		;
+}
+
 static bool is_u26_or_below(const std::string_view& salt)
 {
 	return salt == "b471e49539930dc9b5a131e6247c7387B"
 		|| salt == "b471e49539930dc9b5a131e6247c7387A"
 		|| salt == "6f7fd17e0eb641abQ"
-		|| is_u15_14_or_below(salt)
+		|| is_u16_or_below(salt)
 		;
 }
 
@@ -1065,40 +1072,44 @@ int main(int argc, const char** argv)
 								salt = "b471e49539930dc9b5a131e6247c7387A"; // < U23 && >= U18.18
 								if (crc32::hash((const uint8_t*)salt.data(), salt.size(), initial) != chksum)
 								{
-									salt = "6f7fd17e0eb641abQ"; // < U18.18
+									salt = "6f7fd17e0eb641abQ"; // < U18.18 && >= U16.5
 									if (crc32::hash((const uint8_t*)salt.data(), salt.size(), initial) != chksum)
 									{
-										salt = "6f7fd17e0eb641abN"; // ~ U15.14
+										salt = "6f7fd17e0eb641abP"; // < U16.5 && >= U16
 										if (crc32::hash((const uint8_t*)salt.data(), salt.size(), initial) != chksum)
 										{
-											salt = "6f7fd17e0eb641abH"; // ~ U15
+											salt = "6f7fd17e0eb641abN"; // < U16 && >= U15.14
 											if (crc32::hash((const uint8_t*)salt.data(), salt.size(), initial) != chksum)
 											{
-												salt = "6f7fd17e0eb641abF"; // ~ U13.4
+												salt = "6f7fd17e0eb641abH"; // < U15.14 && >= U15
 												if (crc32::hash((const uint8_t*)salt.data(), salt.size(), initial) != chksum)
 												{
-													salt = "6f7fd17e0eb641abE"; // ~ U13
+													salt = "6f7fd17e0eb641abF"; // < U15 && >= U13.4
 													if (crc32::hash((const uint8_t*)salt.data(), salt.size(), initial) != chksum)
 													{
-														chksum = Endianness::invert(chksum);
-														uint32_t chksum_hi;
-														sr.u32_le(chksum_hi);
-														uint64_t chksum64 = (static_cast<uint64_t>(chksum_hi) << 32) | chksum;
-														//std::cout << "chksum64 = " << std::hex << chksum64 << std::dec << std::endl;
-														salt = "6f7fd17e0eb641abC"; // ~ U11
-														if (md5_checksum(data.data() + sr.getPosition(), data.size() - sr.getPosition(), salt) != chksum64)
+														salt = "6f7fd17e0eb641abE"; // < U13.4 && >= U13
+														if (crc32::hash((const uint8_t*)salt.data(), salt.size(), initial) != chksum)
 														{
-															salt = "6f7fd17e0eb641ab7"; // ~ U10.8
+															chksum = Endianness::invert(chksum);
+															uint32_t chksum_hi;
+															sr.u32_le(chksum_hi);
+															uint64_t chksum64 = (static_cast<uint64_t>(chksum_hi) << 32) | chksum;
+															//std::cout << "chksum64 = " << std::hex << chksum64 << std::dec << std::endl;
+															salt = "6f7fd17e0eb641abC"; // < U13 && >= U11
 															if (md5_checksum(data.data() + sr.getPosition(), data.size() - sr.getPosition(), salt) != chksum64)
 															{
-																salt = "6f7fd17e0eb641ab6"; // ~ U10.3
+																salt = "6f7fd17e0eb641ab7"; // < U11 && >= U10.8
 																if (md5_checksum(data.data() + sr.getPosition(), data.size() - sr.getPosition(), salt) != chksum64)
 																{
-																	salt = "3bd61b742870d0bb3"; // ~ U8
+																	salt = "6f7fd17e0eb641ab6"; // < U10.8 && >= U8.3
 																	if (md5_checksum(data.data() + sr.getPosition(), data.size() - sr.getPosition(), salt) != chksum64)
 																	{
-																		std::cout << addr.toString() << " - Checksum mismatch: " << string::bin2hex(data) << std::endl;
-																		return;
+																		salt = "3bd61b742870d0bb3"; // < U8.3
+																		if (md5_checksum(data.data() + sr.getPosition(), data.size() - sr.getPosition(), salt) != chksum64)
+																		{
+																			std::cout << addr.toString() << " - Checksum mismatch: " << string::bin2hex(data) << std::endl;
+																			return;
+																		}
 																	}
 																}
 															}
@@ -1162,7 +1173,7 @@ int main(int argc, const char** argv)
 					{
 						sr.u32_be(local_ip);
 						sr.u16_le(local_port);
-						if (!is_u15_or_below(salt))
+						if (!is_u15_or_below(salt)) // >= U15.14
 						{
 							ser_str(sr, salt, local_addr_str);
 						}
@@ -1211,7 +1222,7 @@ int main(int argc, const char** argv)
 					}
 					if (!is_u15_or_below(salt))
 					{
-						if (!is_u15_14_or_below(salt))
+						if (!is_u16_or_below(salt))
 						{
 							uint8_t bindingServerId = THIS_SERVER_ID;
 							sw.u8(bindingServerId);
@@ -2001,7 +2012,7 @@ int main(int argc, const char** argv)
 				}
 				else
 #endif
-				if (!is_u15_14_or_below(salt)) // Invite responses were introduced some time after U15.14
+				if (!is_u15_14_or_below(salt)) // >= U16
 				{
 					// Send game invite response with status 0 for offline
 					StringWriter sw;
