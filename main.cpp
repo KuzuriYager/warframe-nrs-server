@@ -127,12 +127,19 @@ static bool is_u11_or_below(const std::string_view& salt)
 		;
 }
 
+static bool is_u12_or_below(const std::string_view& salt)
+{
+	return salt == "6f7fd17e0eb641abD"
+		|| is_u11_or_below(salt)
+		;
+}
+
 static bool is_u15_or_below(const std::string_view& salt)
 {
 	return salt == "6f7fd17e0eb641abH"
 		|| salt == "6f7fd17e0eb641abF"
 		|| salt == "6f7fd17e0eb641abE"
-		|| is_u11_or_below(salt)
+		|| is_u12_or_below(salt)
 		;
 }
 
@@ -233,7 +240,7 @@ static std::string packData(const std::string& data, const std::string_view& sal
 
 	sw.str_lp<u16_le_t>(data);
 
-	if (!is_u11_or_below(salt))
+	if (!is_u11_or_below(salt)) // >= U12
 	{
 		if (!is_u32_or_below(salt))
 		{
@@ -1090,25 +1097,29 @@ int main(int argc, const char** argv)
 														salt = "6f7fd17e0eb641abE"; // < U13.4 && >= U13
 														if (crc32::hash((const uint8_t*)salt.data(), salt.size(), initial) != chksum)
 														{
-															chksum = Endianness::invert(chksum);
-															uint32_t chksum_hi;
-															sr.u32_le(chksum_hi);
-															uint64_t chksum64 = (static_cast<uint64_t>(chksum_hi) << 32) | chksum;
-															//std::cout << "chksum64 = " << std::hex << chksum64 << std::dec << std::endl;
-															salt = "6f7fd17e0eb641abC"; // < U13 && >= U11
-															if (md5_checksum(data.data() + sr.getPosition(), data.size() - sr.getPosition(), salt) != chksum64)
+															salt = "6f7fd17e0eb641abD"; // < U13 && >= U12
+															if (crc32::hash((const uint8_t*)salt.data(), salt.size(), initial) != chksum)
 															{
-																salt = "6f7fd17e0eb641ab7"; // < U11 && >= U10.8
+																chksum = Endianness::invert(chksum);
+																uint32_t chksum_hi;
+																sr.u32_le(chksum_hi);
+																uint64_t chksum64 = (static_cast<uint64_t>(chksum_hi) << 32) | chksum;
+																//std::cout << "chksum64 = " << std::hex << chksum64 << std::dec << std::endl;
+																salt = "6f7fd17e0eb641abC"; // < U12 && >= U11
 																if (md5_checksum(data.data() + sr.getPosition(), data.size() - sr.getPosition(), salt) != chksum64)
 																{
-																	salt = "6f7fd17e0eb641ab6"; // < U10.8 && >= U8.3
+																	salt = "6f7fd17e0eb641ab7"; // < U11 && >= U10.8
 																	if (md5_checksum(data.data() + sr.getPosition(), data.size() - sr.getPosition(), salt) != chksum64)
 																	{
-																		salt = "3bd61b742870d0bb3"; // < U8.3
+																		salt = "6f7fd17e0eb641ab6"; // < U10.8 && >= U8.3
 																		if (md5_checksum(data.data() + sr.getPosition(), data.size() - sr.getPosition(), salt) != chksum64)
 																		{
-																			std::cout << addr.toString() << " - Checksum mismatch: " << string::bin2hex(data) << std::endl;
-																			return;
+																			salt = "3bd61b742870d0bb3"; // < U8.3
+																			if (md5_checksum(data.data() + sr.getPosition(), data.size() - sr.getPosition(), salt) != chksum64)
+																			{
+																				std::cout << addr.toString() << " - Checksum mismatch: " << string::bin2hex(data) << std::endl;
+																				return;
+																			}
 																		}
 																	}
 																}
@@ -1149,8 +1160,8 @@ int main(int argc, const char** argv)
 				uint64_t timestamp;
 				bool is_u42 = false;
 				uint8_t task_id;
-				uint32_t local_ip;
-				uint16_t local_port;
+				uint32_t local_ip = 0; // U12 does not provide a local address, so default-initialise to avoid leaking stack memory in the response
+				uint16_t local_port = 0;
 				std::string local_addr_str;
 
 				if (!is_u10_or_below(salt)) // >= U11
@@ -1160,7 +1171,7 @@ int main(int argc, const char** argv)
 					{
 						sr.u64_le(timestamp);
 					}
-					else if (is_u11_or_below(salt)) // = U11
+					else if (is_u12_or_below(salt)) // < U13
 					{
 						sr.skip(64); // NatHash
 					}
@@ -1207,8 +1218,11 @@ int main(int argc, const char** argv)
 				uint32_t reflexive_ip = addr.ip.getV4NativeEndian();
 				uint16_t reflexive_port = addr.getPort();
 
-				reflexive_ip ^= 0xAAAAAAAA;
-				reflexive_port ^= 0xAAAA;
+				if (!is_u12_or_below(salt)) // U12 does not expect the public address to be xored in the response
+				{
+					reflexive_ip ^= 0xAAAAAAAA;
+					reflexive_port ^= 0xAAAA;
+				}
 
 				StringWriter sw;
 				if (!is_u10_or_below(salt)) // >= U11
@@ -1220,7 +1234,7 @@ int main(int argc, const char** argv)
 						local_ip ^= 0xAAAAAAAA;
 						local_port ^= 0xAAAA;
 					}
-					if (!is_u15_or_below(salt))
+					if (!is_u15_or_below(salt)) // >= U16
 					{
 						if (!is_u16_or_below(salt))
 						{
@@ -1278,7 +1292,7 @@ int main(int argc, const char** argv)
 				if (!is_u10_or_below(salt)) // >= U11
 				{
 					acctId.io(sr);
-					if (is_u11_or_below(salt))
+					if (is_u12_or_below(salt)) // < U13
 					{
 						sr.str(64, NatHash);
 					}
@@ -1405,7 +1419,7 @@ int main(int argc, const char** argv)
 							{ uint8_t b = (packet_id == 0x42 ? 1 : 0); sw.u8(b); }
 						}
 					}
-					if (!is_u11_or_below(salt))
+					if (!is_u12_or_below(salt)) // >= U13
 					{
 						reflexive_ip ^= 0xAAAAAAAA;
 						reflexive_port ^= 0xAAAA;
@@ -1463,7 +1477,7 @@ int main(int argc, const char** argv)
 				if (!is_u10_or_below(salt)) // >= U11
 				{
 					acctId.io(sr);
-					if (is_u11_or_below(salt))
+					if (is_u12_or_below(salt)) // < U13
 					{
 						// NatHash
 					}
@@ -1507,7 +1521,7 @@ int main(int argc, const char** argv)
 				/*MongoId acctId;
 				acctId.io(sr);*/
 				sr.skip(12); // acctId
-				if (is_u11_or_below(salt))
+				if (is_u12_or_below(salt)) // < U13
 				{
 					sr.skip(64); // NatHash
 				}
@@ -1549,11 +1563,11 @@ int main(int argc, const char** argv)
 					{
 						uint8_t b = 0; sw.u8(b);
 					}
-					/*if (packet_id == 0x50) // U27 crashes if this is given for an offline player. Newer versions I think do a fast presence query first so probably won't hit this case anyway.
+					if (is_u15_14_or_below(salt)) // U27 does not expect this for an offline player, whereas U12 does.
 					{
 						std::string str;
 						ser_str(sw, salt, str);
-					}*/
+					}
 				}
 				udp_send(s, addr, packData(sw.data, salt), is_dtls);
 
@@ -1581,7 +1595,7 @@ int main(int argc, const char** argv)
 #else
 				sr.skip(12); // acctId
 #endif
-				if (is_u11_or_below(salt))
+				if (is_u12_or_below(salt)) // < U13
 				{
 					sr.skip(64); // NatHash
 				}
@@ -1768,7 +1782,7 @@ int main(int argc, const char** argv)
 				if (!is_u10_or_below(salt)) // >= U11
 				{
 					acctId.io(sr);
-					if (is_u11_or_below(salt))
+					if (is_u12_or_below(salt)) // < U13
 					{
 						sr.skip(64); // NatHash
 					}
@@ -1948,7 +1962,7 @@ int main(int argc, const char** argv)
 			{
 				MongoId acctId;
 				acctId.io(sr);
-				if (is_u11_or_below(salt))
+				if (is_u12_or_below(salt)) // < U13
 				{
 					sr.skip(64); // NatHash
 				}
@@ -2131,7 +2145,7 @@ int main(int argc, const char** argv)
 				uint8_t num_targets = 1;
 
 				acctId.io(sr);
-				if (is_u11_or_below(salt))
+				if (is_u12_or_below(salt)) // < U13
 				{
 					sr.skip(64); // NatHash
 				}
