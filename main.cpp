@@ -315,9 +315,7 @@ static bool ser_str(T& s, const std::string_view& salt, std::string& str)
 	{
 		s.oml(len);
 	}
-	SOUP_RETHROW_FALSE(len <= 1024);
-	s.str(len, str);
-	return true;
+	return s.str(len, str);
 }
 
 union MongoId
@@ -693,6 +691,51 @@ struct AccountResolveResponse
 			;
 	}
 #endif
+};
+
+struct C2STest
+{
+	MongoId acctId;
+	uint64_t timestamp = 0;
+	uint32_t local_ip = 0;
+	uint16_t local_port = 0;
+	std::string local_addr_str;
+
+	void readU11U27(Reader& sr, const std::string_view& salt)
+	{
+		acctId.io(sr);
+		if (is_u12_or_below(salt)) // < U13
+		{
+			sr.skip(64); // NatHash
+		}
+		sr.u32_be(local_ip); // U12 does not provide a local address
+		sr.u16_le(local_port);
+		if (!is_u15_or_below(salt)) // >= U15.14
+		{
+			ser_str(sr, salt, local_addr_str);
+		}
+	}
+
+	bool readU28U29(Reader& sr)
+	{
+		return acctId.io(sr)
+			&& sr.u32_be(local_ip)
+			&& sr.u16_le(local_port)
+			&& ser_str(sr, "b471e49539930dc9b5a131e6247c7387E", local_addr_str)
+			&& !sr.hasMore()
+			;
+	}
+
+	bool readU30U31(Reader& sr)
+	{
+		return acctId.io(sr)
+			&& sr.u64_le(timestamp)
+			&& sr.u32_be(local_ip)
+			&& sr.u16_le(local_port)
+			&& ser_str(sr, "b471e49539930dc9b5a131e6247c7387E", local_addr_str)
+			&& !sr.hasMore()
+			;
+	}
 };
 
 struct ResolveResponse
@@ -1156,38 +1199,54 @@ int main(int argc, const char** argv)
 			{
 				//std::cout << addr.toString() << " - Test: " << string::bin2hex(data) << std::endl;
 
-				MongoId acctId;
-				uint64_t timestamp;
+				C2STest test;
+				bool has_timestamp = false;
 				bool is_u42 = false;
 				uint8_t task_id;
-				uint32_t local_ip = 0; // U12 does not provide a local address, so default-initialise to avoid leaking stack memory in the response
-				uint16_t local_port = 0;
-				std::string local_addr_str;
 
 				if (!is_u10_or_below(salt)) // >= U11
 				{
-					acctId.io(sr);
 					if (!is_u27_or_below(salt)) // >= U28
 					{
-						sr.u64_le(timestamp);
-					}
-					else if (is_u12_or_below(salt)) // < U13
-					{
-						sr.skip(64); // NatHash
-					}
-					if (sr.getPosition() + 1 == data.size()) // >= U42
-					{
-						is_u42 = true;
-						sr.u8(task_id);
+						if (!is_u32_or_below(salt)) // >= U33
+						{
+							has_timestamp = true;
+							test.acctId.io(sr);
+							sr.u64_le(test.timestamp);
+							if (sr.getPosition() + 1 == data.size()) // >= U42
+							{
+								is_u42 = true;
+								sr.u8(task_id);
+							}
+							else
+							{
+								sr.u32_be(test.local_ip);
+								sr.u16_le(test.local_port);
+								ser_str(sr, salt, test.local_addr_str);
+							}
+						}
+						else
+						{
+							const auto pos = sr.getPosition();
+							if (test.readU30U31(sr))
+							{
+								//std::cout << addr.toString() << " - Test format: U30-U31" << std::endl;
+								has_timestamp = true;
+							}
+							else if (sr.seek(pos), test.readU28U29(sr))
+							{
+								//std::cout << addr.toString() << " - Test format: U28-U29" << std::endl;
+							}
+							else
+							{
+								std::cout << addr.toString() << " - Malformed packet: " << string::bin2hex(data) << std::endl;
+								return;
+							}
+						}
 					}
 					else
 					{
-						sr.u32_be(local_ip);
-						sr.u16_le(local_port);
-						if (!is_u15_or_below(salt)) // >= U15.14
-						{
-							ser_str(sr, salt, local_addr_str);
-						}
+						test.readU11U27(sr, salt);
 					}
 				}
 				else
@@ -1198,21 +1257,21 @@ int main(int argc, const char** argv)
 #if ENABLE_SHADOW_REALM && BANISH_U42_TO_SHADOW_REALM
 				if (is_u42)
 				{
-					if (auto e = account_map.find(acctId); e != account_map.end())
+					if (auto e = account_map.find(test.acctId); e != account_map.end())
 					{
 						if (!e->second.in_shadow_realm)
 						{
 							e->second.in_shadow_realm = true;
-							std::cout << addr.toString() << "#" << acctId.toString() << " - Banished to the shadow realm" << std::endl;
+							std::cout << addr.toString() << "#" << test.acctId.toString() << " - Banished to the shadow realm" << std::endl;
 						}
 					}
 				}
 #endif
 
-				//std::cout << addr.toString() << " - local_addr: " << IpAddr((native_u32_t)local_ip).toString() << ":" << local_port << std::endl;
-				if (!is_u15_or_below(salt))
+				//std::cout << addr.toString() << " - local_addr: " << IpAddr((native_u32_t)test.local_ip).toString() << ":" << test.local_port << std::endl;
+				if (!is_u15_or_below(salt)) // >= U15.14
 				{
-					//std::cout << addr.toString() << " - local_addr_str: " << local_addr_str << std::endl;
+					//std::cout << addr.toString() << " - local_addr_str: " << test.local_addr_str << std::endl;
 				}
 
 				uint32_t reflexive_ip = addr.ip.getV4NativeEndian();
@@ -1231,8 +1290,8 @@ int main(int argc, const char** argv)
 					if (is_u15_14_or_below(salt))
 					{
 						// local addr is not xored in the request, but is expected to be xored in the response
-						local_ip ^= 0xAAAAAAAA;
-						local_port ^= 0xAAAA;
+						test.local_ip ^= 0xAAAAAAAA;
+						test.local_port ^= 0xAAAA;
 					}
 					if (!is_u15_or_below(salt)) // >= U16
 					{
@@ -1242,10 +1301,10 @@ int main(int argc, const char** argv)
 							sw.u8(bindingServerId);
 						}
 						sw.u8(packet_id);
-						acctId.io(sw);
-						if (!is_u27_or_below(salt))
+						test.acctId.io(sw);
+						if (has_timestamp)
 						{
-							sw.u64_le(timestamp);
+							sw.u64_le(test.timestamp);
 						}
 						if (is_u42) // >= U42
 						{
@@ -1253,9 +1312,9 @@ int main(int argc, const char** argv)
 						}
 						else
 						{
-							sw.u32_be(local_ip);
-							sw.u16_le(local_port);
-							ser_str(sw, salt, local_addr_str);
+							sw.u32_be(test.local_ip);
+							sw.u16_le(test.local_port);
+							ser_str(sw, salt, test.local_addr_str);
 						}
 						sw.u32_be(reflexive_ip);
 						sw.u16_le(reflexive_port);
@@ -1264,8 +1323,8 @@ int main(int argc, const char** argv)
 					{
 						sw.u32_be(reflexive_ip);
 						sw.u16_le(reflexive_port);
-						sw.u32_be(local_ip);
-						sw.u16_le(local_port);
+						sw.u32_be(test.local_ip);
+						sw.u16_le(test.local_port);
 					}
 				}
 				else
@@ -1300,7 +1359,7 @@ int main(int argc, const char** argv)
 					sr.u16_le(local_port);
 					local_ip ^= 0xAAAAAAAA;
 					local_port ^= 0xAAAA;
-					if (!is_u27_or_below(salt))
+					if (!is_u32_or_below(salt)) // >= U33 (Not sent in U29, U30, or U31.5)
 					{
 						sr.skip(2); // 00 01. Thought it might be related to multiple binding servers, but it's not.
 					}
