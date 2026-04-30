@@ -2612,6 +2612,13 @@ int main(int argc, const char** argv)
 					}
 					if (buildId != 0)
 					{
+#if ENABLE_SHADOW_REALM && BANISH_U42_TO_SHADOW_REALM
+						if (!e->second.in_shadow_realm && buildId >= 202603241659)
+						{
+							e->second.in_shadow_realm = true;
+							std::cout << addr.toString() << " - Provided buildId for " << j->reinterpretAsStr().value << ": " << buildId << "; banished to shadow realm" << std::endl;
+						}
+#endif
 						e->second.buildId = buildId;
 					}
 				}
