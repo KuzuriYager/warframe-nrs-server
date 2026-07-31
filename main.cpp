@@ -1,6 +1,3 @@
-#include <iostream>
-#include <unordered_map>
-
 #ifndef PORTS
 	#if DEPLOYMENT
 		#define PORTS { 4950, 3960 }
@@ -38,6 +35,9 @@
 	#define THIS_SERVER_ID 0
 #endif
 #define JITTER false
+
+#include <iostream>
+#include <unordered_map>
 
 #include <crc32.hpp>
 #include <crc32c.hpp>
