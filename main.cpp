@@ -1280,7 +1280,7 @@ int main(int argc, const char** argv)
 					}
 					if (!is_u15_or_below(salt)) // >= U16
 					{
-						if (!is_u16_or_below(salt))
+						if (!is_u16_or_below(salt)) // >= U16.5
 						{
 							uint8_t bindingServerId = THIS_SERVER_ID;
 							sw.u8(bindingServerId);
