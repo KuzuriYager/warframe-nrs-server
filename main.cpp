@@ -11,8 +11,7 @@
 
 // Users banished to the shadow realm have incoming and outgoing P2P connection attempts blocked.
 #define ENABLE_SHADOW_REALM DEPLOYMENT
-#define BANISH_U41_1_TO_SHADOW_REALM false
-#define BANISH_U42_TO_SHADOW_REALM DEPLOYMENT
+#define MIN_VERSION_TO_BANISH (2026'05'13'13'07 + 1)
 
 #define MAX_PROXY_CONNECTIONS 100
 #define PROXYING_FOR_LEGACY true
@@ -1254,20 +1253,6 @@ int main(int argc, const char** argv)
 					// ',' acctId ',' NatHash
 				}
 
-#if ENABLE_SHADOW_REALM && BANISH_U42_TO_SHADOW_REALM
-				if (is_u42)
-				{
-					if (auto e = account_map.find(test.acctId); e != account_map.end())
-					{
-						if (!e->second.in_shadow_realm)
-						{
-							e->second.in_shadow_realm = true;
-							std::cout << addr.toString() << "#" << test.acctId.toString() << " - Banished to the shadow realm" << std::endl;
-						}
-					}
-				}
-#endif
-
 				//std::cout << addr.toString() << " - local_addr: " << IpAddr((native_u32_t)test.local_ip).toString() << ":" << test.local_port << std::endl;
 				if (!is_u15_or_below(salt)) // >= U15.14
 				{
@@ -1434,15 +1419,6 @@ int main(int argc, const char** argv)
 					{
 						data->presence = std::move(presence);
 						std::cout << addr.toString() << "#" << acctId.toString() << " - Updated presence: " << data->presence << std::endl;
-#if ENABLE_SHADOW_REALM && BANISH_U41_1_TO_SHADOW_REALM
-						if (!data->in_shadow_realm
-							&& (data->presence.find("{\"l\":") != std::string::npos || data->presence.find(",\"l\":") != std::string::npos)
-							)
-						{
-							data->in_shadow_realm = true;
-							std::cout << addr.toString() << "#" << acctId.toString() << " - Banished to the shadow realm" << std::endl;
-						}
-#endif
 					}
 
 #if ENABLE_MOTD
@@ -1499,13 +1475,6 @@ int main(int argc, const char** argv)
 				{
 					if (sr.hasMore()) // U42 + Token
 					{
-#if ENABLE_SHADOW_REALM && BANISH_U42_TO_SHADOW_REALM
-						if (!data->in_shadow_realm)
-						{
-							data->in_shadow_realm = true;
-							std::cout << addr.toString() << "#" << acctId.toString() << " - Banished to the shadow realm" << std::endl;
-						}
-#endif
 						ser_str(sr, salt, data->username);
 						//sr.skip(40); // Token
 					}
@@ -2612,8 +2581,8 @@ int main(int argc, const char** argv)
 					}
 					if (buildId != 0)
 					{
-#if ENABLE_SHADOW_REALM && BANISH_U42_TO_SHADOW_REALM
-						if (!e->second.in_shadow_realm && buildId >= 202603241659)
+#if ENABLE_SHADOW_REALM
+						if (!e->second.in_shadow_realm && buildId >= MIN_VERSION_TO_BANISH)
 						{
 							e->second.in_shadow_realm = true;
 							std::cout << addr.toString() << " - Provided buildId for " << j->reinterpretAsStr().value << ": " << buildId << "; banished to shadow realm" << std::endl;
