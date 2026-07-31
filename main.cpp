@@ -421,7 +421,7 @@ struct AccountData
 #endif
 
 	uint8_t status; // presence state
-	std::string presence;
+	std::string presence; // presence is a json object. exact format depends on version, e.g. U41.1 changed "level" to "l", etc.
 
 	time_t last_nat_bind;
 
