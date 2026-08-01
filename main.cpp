@@ -393,8 +393,8 @@ namespace std
 enum NatBehaviour : uint8_t
 {
 	NAT_UNK,
-	NAT_TRANSPARENT,
-	NAT_STRICT,
+	NAT_TRANSPARENT, // Outgoing datagrams with the local same source port keep the same reflexive source port regardless of destination address.
+	NAT_STRICT, // Outgoing datagrams with the same local source port have different reflexive source ports depending on the destination address.
 };
 
 struct AccountData
