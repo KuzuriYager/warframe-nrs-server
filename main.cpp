@@ -7,7 +7,7 @@
 #endif
 
 // Users banished to the shadow realm have incoming and outgoing P2P connection attempts blocked.
-#define ENABLE_SHADOW_REALM DEPLOYMENT
+#define ENABLE_SHADOW_REALM false
 #define MIN_VERSION_TO_BANISH (2026'05'13'13'07 + 1)
 
 #define MAX_PROXY_CONNECTIONS 100
@@ -1099,68 +1099,72 @@ int main(int argc, const char** argv)
 		//std::cout << "Recvd chksum: " << chksum << std::endl;
 
 		uint32_t initial = crc32c::hash((const uint8_t*)data.data() + sr.getPosition(), data.size() - sr.getPosition(), 0);
-		std::string_view salt = "b471e49539930dc9b5a131e6247c7387H"; // >= U41
+		std::string_view salt = "b471e49539930dc9b5a131e6247c7387I"; // >= U43
 		if (crc32c::hash((const uint8_t*)salt.data(), salt.size(), initial) != chksum)
 		{
-			salt = "b471e49539930dc9b5a131e6247c7387G"; // < U41 && >= U35.5
+			salt = "b471e49539930dc9b5a131e6247c7387H"; // >= U41
 			if (crc32c::hash((const uint8_t*)salt.data(), salt.size(), initial) != chksum)
 			{
-				salt = "b471e49539930dc9b5a131e6247c7387F"; // < U35.5 && >= U33
+				salt = "b471e49539930dc9b5a131e6247c7387G"; // < U41 && >= U35.5
 				if (crc32c::hash((const uint8_t*)salt.data(), salt.size(), initial) != chksum)
 				{
-					initial = crc32::hash((const uint8_t*)data.data() + sr.getPosition(), data.size() - sr.getPosition(), 0);
-					salt = "b471e49539930dc9b5a131e6247c7387E"; // < U33 && >= U28
-					if (crc32::hash((const uint8_t*)salt.data(), salt.size(), initial) != chksum)
+					salt = "b471e49539930dc9b5a131e6247c7387F"; // < U35.5 && >= U33
+					if (crc32c::hash((const uint8_t*)salt.data(), salt.size(), initial) != chksum)
 					{
-						salt = "b471e49539930dc9b5a131e6247c7387D"; // < U28 && >= U27
+						initial = crc32::hash((const uint8_t*)data.data() + sr.getPosition(), data.size() - sr.getPosition(), 0);
+						salt = "b471e49539930dc9b5a131e6247c7387E"; // < U33 && >= U28
 						if (crc32::hash((const uint8_t*)salt.data(), salt.size(), initial) != chksum)
 						{
-							salt = "b471e49539930dc9b5a131e6247c7387B"; // < U27 && >= U23
+							salt = "b471e49539930dc9b5a131e6247c7387D"; // < U28 && >= U27
 							if (crc32::hash((const uint8_t*)salt.data(), salt.size(), initial) != chksum)
 							{
-								salt = "b471e49539930dc9b5a131e6247c7387A"; // < U23 && >= U18.18
+								salt = "b471e49539930dc9b5a131e6247c7387B"; // < U27 && >= U23
 								if (crc32::hash((const uint8_t*)salt.data(), salt.size(), initial) != chksum)
 								{
-									salt = "6f7fd17e0eb641abQ"; // < U18.18 && >= U16.5
+									salt = "b471e49539930dc9b5a131e6247c7387A"; // < U23 && >= U18.18
 									if (crc32::hash((const uint8_t*)salt.data(), salt.size(), initial) != chksum)
 									{
-										salt = "6f7fd17e0eb641abP"; // < U16.5 && >= U16
+										salt = "6f7fd17e0eb641abQ"; // < U18.18 && >= U16.5
 										if (crc32::hash((const uint8_t*)salt.data(), salt.size(), initial) != chksum)
 										{
-											salt = "6f7fd17e0eb641abN"; // < U16 && >= U15.14
+											salt = "6f7fd17e0eb641abP"; // < U16.5 && >= U16
 											if (crc32::hash((const uint8_t*)salt.data(), salt.size(), initial) != chksum)
 											{
-												salt = "6f7fd17e0eb641abH"; // < U15.14 && >= U15
+												salt = "6f7fd17e0eb641abN"; // < U16 && >= U15.14
 												if (crc32::hash((const uint8_t*)salt.data(), salt.size(), initial) != chksum)
 												{
-													salt = "6f7fd17e0eb641abF"; // < U15 && >= U13.4
+													salt = "6f7fd17e0eb641abH"; // < U15.14 && >= U15
 													if (crc32::hash((const uint8_t*)salt.data(), salt.size(), initial) != chksum)
 													{
-														salt = "6f7fd17e0eb641abE"; // < U13.4 && >= U13
+														salt = "6f7fd17e0eb641abF"; // < U15 && >= U13.4
 														if (crc32::hash((const uint8_t*)salt.data(), salt.size(), initial) != chksum)
 														{
-															salt = "6f7fd17e0eb641abD"; // < U13 && >= U12
+															salt = "6f7fd17e0eb641abE"; // < U13.4 && >= U13
 															if (crc32::hash((const uint8_t*)salt.data(), salt.size(), initial) != chksum)
 															{
-																chksum = Endianness::invert(chksum);
-																uint32_t chksum_hi;
-																sr.u32_le(chksum_hi);
-																uint64_t chksum64 = (static_cast<uint64_t>(chksum_hi) << 32) | chksum;
-																//std::cout << "chksum64 = " << std::hex << chksum64 << std::dec << std::endl;
-																salt = "6f7fd17e0eb641abC"; // < U12 && >= U11
-																if (md5_checksum(data.data() + sr.getPosition(), data.size() - sr.getPosition(), salt) != chksum64)
+																salt = "6f7fd17e0eb641abD"; // < U13 && >= U12
+																if (crc32::hash((const uint8_t*)salt.data(), salt.size(), initial) != chksum)
 																{
-																	salt = "6f7fd17e0eb641ab7"; // < U11 && >= U10.8
+																	chksum = Endianness::invert(chksum);
+																	uint32_t chksum_hi;
+																	sr.u32_le(chksum_hi);
+																	uint64_t chksum64 = (static_cast<uint64_t>(chksum_hi) << 32) | chksum;
+																	//std::cout << "chksum64 = " << std::hex << chksum64 << std::dec << std::endl;
+																	salt = "6f7fd17e0eb641abC"; // < U12 && >= U11
 																	if (md5_checksum(data.data() + sr.getPosition(), data.size() - sr.getPosition(), salt) != chksum64)
 																	{
-																		salt = "6f7fd17e0eb641ab6"; // < U10.8 && >= U8.3
+																		salt = "6f7fd17e0eb641ab7"; // < U11 && >= U10.8
 																		if (md5_checksum(data.data() + sr.getPosition(), data.size() - sr.getPosition(), salt) != chksum64)
 																		{
-																			salt = "3bd61b742870d0bb3"; // < U8.3
+																			salt = "6f7fd17e0eb641ab6"; // < U10.8 && >= U8.3
 																			if (md5_checksum(data.data() + sr.getPosition(), data.size() - sr.getPosition(), salt) != chksum64)
 																			{
-																				std::cout << addr.toString() << " - Checksum mismatch: " << string::bin2hex(data) << std::endl;
-																				return;
+																				salt = "3bd61b742870d0bb3"; // < U8.3
+																				if (md5_checksum(data.data() + sr.getPosition(), data.size() - sr.getPosition(), salt) != chksum64)
+																				{
+																					std::cout << addr.toString() << " - Checksum mismatch: " << string::bin2hex(data) << std::endl;
+																					return;
+																				}
 																			}
 																		}
 																	}
